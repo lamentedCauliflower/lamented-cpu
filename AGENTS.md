@@ -72,6 +72,20 @@ including its unknown-channel error path.
 - cachix cannot cache the unfree Factorio binary, so CI re-fetches it each run.
 - Leave `release.yml` / the semantic-release pipeline alone unless explicitly asked.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as GitHub issues on `lamentedCauliflower/lamented-cpu` (use the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles, each mapped to its default label string (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ## Pointers
 
 - `README.md` — template usage, repo setup, commit convention, packaging.
