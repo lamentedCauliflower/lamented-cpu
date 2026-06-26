@@ -1,0 +1,12 @@
+-- busted config for the template.
+-- Specs run under Lua 5.2 (the game's Lua); the interpreter is pinned by
+-- `lua52Packages.busted` in devenv.nix, so nothing to set here for the dialect.
+-- `require("foo")` resolves to ./lib/foo.lua (mod modules) or ./foo.lua.
+return {
+  -- Options must live under a task key (e.g. `default`); top-level keys are
+  -- read as task names, not options, so lpath would be silently ignored.
+  default = {
+    lpath = "./lib/?.lua;./?.lua",
+    cpath = "./?.so;./lib/?.so",
+  },
+}

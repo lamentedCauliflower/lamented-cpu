@@ -1,0 +1,30 @@
+# Set the default behavior to automatically detect text files and perform LF normalization
+* text=auto
+
+# files that should not be modified
+*.png binary
+*.blend binary export-ignore
+
+# files that should not get included in a release zip
+README.md export-ignore
+.vscode export-ignore
+.git export-ignore
+.github export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+.releaserc export-ignore
+
+# dev environment (not part of the mod)
+devenv.nix export-ignore
+devenv.yaml export-ignore
+devenv.lock export-ignore
+.busted export-ignore
+.luacheckrc export-ignore
+.stylua.toml export-ignore
+.luarc.json export-ignore
+spec export-ignore
+scripts export-ignore
+docs export-ignore
+AGENTS.md export-ignore
+.envrc export-ignore
+benchmark export-ignore

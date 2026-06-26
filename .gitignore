@@ -1,0 +1,22 @@
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+*.code-workspace
+*.zip
+# ...but allow committed benchmark saves (representative perf baselines)
+!benchmark/*.zip
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
+
+# Factorio dev sandbox (saves, mods, logs, generated config)
+.factorio/
