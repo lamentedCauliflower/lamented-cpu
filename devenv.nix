@@ -157,12 +157,47 @@ INI
       echo "Packaged $out"
     '';
 
+    # Regenerate the committed riscv-tests .s fixtures (ADR-0004). The Hart runs
+    # assembly, not binaries: clone riscv-tests at a pinned rev and expand each
+    # test source with cpp against our custom minimal M-mode env (spec/riscv-env)
+    # into flat, self-contained assembly. No RISC-V toolchain and no machine code;
+    # only cpp, pulled via nix shell so it never touches the `devenv test` CI gate.
+    # ponytail: cpp + a custom env at vendor time instead of reimplementing
+    # cpp+gas+ld; rv32mi lands here once the env gains M-mode encoding consts (#7).
+    scripts.gen-riscv-tests.exec = ''
+      set -euo pipefail
+      rev="34e6b6d1e7936b526075432fb730d89148623484" # pinned riscv-tests
+      export GEN_ENV="$PWD/spec/riscv-env"
+      export GEN_OUT="$PWD/spec/fixtures/riscv-tests"
+      work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+      echo "== clone riscv-tests @ $rev =="
+      git clone --quiet https://github.com/riscv-software-src/riscv-tests "$work"
+      git -C "$work" checkout --quiet "$rev"
+      export GEN_ISA="$work/isa"
+      echo "== expand rv32ui/rv32um sources to flat .s (cpp + custom M-mode env) =="
+      find "$GEN_OUT" -name '*.s' -delete 2>/dev/null || true
+      mkdir -p "$GEN_OUT"
+      nix shell nixpkgs#gcc -c bash -c '
+        set -e
+        for fam in rv32ui rv32um; do
+          for src in "$GEN_ISA/$fam"/*.S; do
+            name=$(basename "$src" .S)
+            cpp -E -P -nostdinc -D__riscv_xlen=32 \
+              -I "$GEN_ENV" -I "$GEN_ISA/macros/scalar" \
+              "$src" > "$GEN_OUT/$fam-p-$name.s"
+          done
+        done
+      '
+      echo "wrote $(ls "$GEN_OUT"/*.s | wc -l) .s fixtures (riscv-tests @ $rev)"
+    '';
+
     enterShell = ''
       echo "Factorio mod dev env — channel: ''${FACTORIO_CHANNEL:-experimental}"
       echo "  modtest [chan]   busted + headless load-smoke   (canonical: devenv test)"
       echo "  bench  [chan]    headless benchmark  (env: BENCH_TICKS=, BENCH_SAVE=)"
       echo "  play   [chan]    full client (opt-in: withClient=true in devenv.nix)"
       echo "  lint | fmt | package"
+      echo "  gen-riscv-tests  rebuild committed riscv-tests .s fixtures (dev-only, pinned)"
       echo "  channels: stable | experimental   (export FACTORIO_CHANNEL to pin a shell)"
       echo "  note: the test command is 'modtest' — 'test' is the bash builtin."
     '';
