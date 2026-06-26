@@ -1,5 +1,9 @@
 # Commit prebuilt riscv-tests ELFs as fixtures; no toolchain in CI
 
+> **Status: superseded by [ADR-0004](0004-conformance-runs-assembly.md).** The Hart
+> runs assembly, not compiled binaries, so conformance assembles the `riscv-tests`
+> assembly sources in-Lua rather than loading prebuilt ELFs. Kept for history.
+
 The compiled `riscv-tests` ELFs (from a pinned upstream revision) are committed under
 `spec/fixtures/riscv-tests/` and consumed directly by the `busted` gate, which parses
 their `.symtab` to find `tohost`. A devenv command regenerates them via the RISC-V
