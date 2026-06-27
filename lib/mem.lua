@@ -3,7 +3,7 @@
 -- (rv32ui-p-ma_data) just work, which is what the only vendored ma_data fixture
 -- wants -- cheaper than a trap-and-emulate handler. Ceiling: one table entry per
 -- written byte; swap for a word store + byte overlay if memory ever matters.
-local rv = require("rvbit")
+local rv = require("lib.rvbit")
 local rsh = rv.rsh
 local M = {}
 M.__index = M

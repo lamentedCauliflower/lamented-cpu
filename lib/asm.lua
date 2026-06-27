@@ -10,7 +10,7 @@
 -- are treated as no-ops bar their .align), because memory is sparse and the tests
 -- only need labels at distinct, consistent, aligned addresses. Real section
 -- placement is deferred until something needs it.
-local rv = require("rvbit")
+local rv = require("lib.rvbit")
 local u32, sext, signed = rv.u32, rv.sext, rv.signed
 local band, bor, lsh, rsh, bits = rv.band, rv.bor, rv.lsh, rv.rsh, rv.bits
 

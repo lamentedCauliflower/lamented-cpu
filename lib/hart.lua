@@ -5,7 +5,7 @@
 -- ponytail: only the instructions the walking skeleton's first test needs are
 -- fleshed out fully; mul/div (M, #6) and byte/halfword loads (#4) raise a clear
 -- error so an out-of-scope test fails loudly instead of silently misbehaving.
-local rv = require("rvbit")
+local rv = require("lib.rvbit")
 local u32, sext, signed = rv.u32, rv.sext, rv.signed
 local band, bor, bnot, lsh, rsh, ash, bits =
   rv.band, rv.bor, rv.bnot, rv.lsh, rv.rsh, rv.ash, rv.bits
