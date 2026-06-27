@@ -45,6 +45,16 @@ local ALLOW = {
   "rv32ui-p-ld_st",
   "rv32ui-p-st_ld",
   "rv32ui-p-ma_data",
+  -- #6 RV32I control flow (branches + jumps); fence_i is a nop for one hart
+  "rv32ui-p-beq",
+  "rv32ui-p-bne",
+  "rv32ui-p-blt",
+  "rv32ui-p-bge",
+  "rv32ui-p-bltu",
+  "rv32ui-p-bgeu",
+  "rv32ui-p-jal",
+  "rv32ui-p-jalr",
+  "rv32ui-p-fence_i",
 }
 
 local function read(path)

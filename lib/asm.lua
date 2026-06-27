@@ -458,13 +458,24 @@ function M.assemble(src)
       end)
     elseif m == "jr" then
       local rs = reg(o[1])
+      local off = o[2] and evalexpr(o[2], sym, weak) or 0
       emit(function()
-        return eI(0x67, 0, 0, rs, 0)
+        return eI(0x67, 0, 0, rs, off)
       end)
     elseif m == "jalr" then
-      local rd, rs = reg(o[1]), reg(o[2] or o[1])
+      local rd, rs1, off
+      if #o == 1 then -- jalr rs  ->  jalr ra, 0(rs)
+        rd, rs1, off = 1, reg(o[1]), 0
+      elseif #o == 2 and o[2]:find("%(") then -- jalr rd, off(rs1)
+        local imm, r = parse_mem(o[2])
+        rd, rs1, off = reg(o[1]), r, imm
+      elseif #o == 2 then -- jalr rd, rs1
+        rd, rs1, off = reg(o[1]), reg(o[2]), 0
+      else -- jalr rd, rs1, imm
+        rd, rs1, off = reg(o[1]), reg(o[2]), evalexpr(o[3], sym, weak)
+      end
       emit(function()
-        return eI(0x67, 0, rd, rs, 0)
+        return eI(0x67, 0, rd, rs1, off)
       end)
     elseif m == "ret" then
       emit(function()
@@ -473,10 +484,24 @@ function M.assemble(src)
     elseif m == "lw" or m == "lh" or m == "lb" or m == "lhu" or m == "lbu" then
       local f3 = ({ lb = 0, lh = 1, lw = 2, lbu = 4, lhu = 5 })[m]
       local rd = reg(o[1])
-      local off, rs1 = parse_mem(o[2])
-      emit(function()
-        return eI(0x03, f3, rd, rs1, off)
-      end)
+      if o[2]:find("%(") then
+        local off, rs1 = parse_mem(o[2])
+        emit(function()
+          return eI(0x03, f3, rd, rs1, off)
+        end)
+      else -- pseudo: l rd, symbol  (auipc rd, %pcrel_hi ; l rd, %pcrel_lo(rd))
+        local base = lc
+        local tf = targetfn(o[2])
+        emit(function()
+          local d = u32(tf(base) - base)
+          local lo = signed(sext(band(d, 0xFFF), 12))
+          return eU(0x17, rd, rsh(u32(d - lo), 12))
+        end)
+        emit(function()
+          local d = u32(tf(base) - base)
+          return eI(0x03, f3, rd, rd, signed(sext(band(d, 0xFFF), 12)))
+        end)
+      end
     elseif m == "sw" or m == "sh" or m == "sb" then
       local f3 = ({ sb = 0, sh = 1, sw = 2 })[m]
       if #o == 3 and not o[2]:find("%(") then -- pseudo: sw rs, symbol, rt
@@ -516,6 +541,10 @@ function M.assemble(src)
     elseif m == "fence" then
       emit(function()
         return 0x0FF0000F
+      end)
+    elseif m == "fence.i" then
+      emit(function()
+        return 0x0000100F
       end)
     elseif m == "ecall" then
       emit(function()
