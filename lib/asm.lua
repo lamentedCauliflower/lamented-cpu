@@ -268,22 +268,32 @@ function M.assemble(src)
   end
 
   -- resolve an operand to an absolute target address (local label NfNb, or expr)
+  local function local_label(n, fb, here)
+    n = tonumber(n)
+    local best
+    for _, L in ipairs(locals) do
+      if L.num == n then
+        if fb == "f" and L.addr > here and (not best or L.addr < best) then
+          best = L.addr
+        elseif fb == "b" and L.addr <= here and (not best or L.addr > best) then
+          best = L.addr
+        end
+      end
+    end
+    return assert(best, "unresolved local label '" .. n .. fb .. "'")
+  end
+
   local function targetfn(tok)
     return function(here)
-      local n, fb = tok:match("^(%d+)([fb])$")
+      -- a leading local-label ref (e.g. `1f + 10000`) resolves to its address,
+      -- then the rest is constant-folded as an expression.
+      local n, fb, rest = tok:match("^(%d+)([fb])(.*)$")
       if n then
-        n = tonumber(n)
-        local best
-        for _, L in ipairs(locals) do
-          if L.num == n then
-            if fb == "f" and L.addr > here and (not best or L.addr < best) then
-              best = L.addr
-            elseif fb == "b" and L.addr <= here and (not best or L.addr > best) then
-              best = L.addr
-            end
-          end
+        local addr = local_label(n, fb, here)
+        if rest:match("^%s*$") then
+          return addr
         end
-        return assert(best, "unresolved local label '" .. tok .. "'")
+        return evalexpr(tostring(addr) .. rest, sym, weak)
       end
       return evalexpr(tok, sym, weak)
     end
@@ -403,7 +413,7 @@ function M.assemble(src)
       end)
     elseif m == "li" then
       li(reg(o[1]), evalexpr(o[2], sym, weak))
-    elseif m == "la" then
+    elseif m == "la" or m == "lla" then -- both pc-relative in our flat image
       la(reg(o[1]), o[2])
     elseif m == "mv" then
       local rd, rs = reg(o[1]), reg(o[2])
@@ -531,7 +541,15 @@ function M.assemble(src)
   local function directive(d, rest)
     if d == ".align" or d == ".p2align" then
       local a = 2 ^ tonumber(rest:match("^%d+"))
-      lc = math.ceil(lc / a) * a
+      local target = math.ceil(lc / a) * a
+      -- pad whole words with nop so PC flowing through a .text gap stays legal;
+      -- any sub-word remainder (only from .byte/.half data) is just skipped.
+      while lc % 4 == 0 and lc + 4 <= target do
+        emit(function()
+          return 0x13 -- addi x0, x0, 0
+        end)
+      end
+      lc = target
     elseif d == ".dword" then
       lc = lc + 8
     elseif d == ".word" then

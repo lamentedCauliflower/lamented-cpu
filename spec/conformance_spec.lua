@@ -7,9 +7,32 @@ local Hart = require("hart")
 
 local FIXTURES = "spec/fixtures/riscv-tests/"
 
--- ponytail: start at the single simplest test. Slices #3-#6 extend this list.
+-- ponytail: the allowlist grows one slice at a time. Slices #5-#6 add the
+-- load/store and control-flow fixtures; #9 adds rv32um (M extension).
 local ALLOW = {
+  -- #3 walking skeleton + #4 RV32I ALU (reg-reg, reg-imm, lui, auipc)
+  "rv32ui-p-simple",
   "rv32ui-p-add",
+  "rv32ui-p-addi",
+  "rv32ui-p-sub",
+  "rv32ui-p-and",
+  "rv32ui-p-andi",
+  "rv32ui-p-or",
+  "rv32ui-p-ori",
+  "rv32ui-p-xor",
+  "rv32ui-p-xori",
+  "rv32ui-p-sll",
+  "rv32ui-p-slli",
+  "rv32ui-p-srl",
+  "rv32ui-p-srli",
+  "rv32ui-p-sra",
+  "rv32ui-p-srai",
+  "rv32ui-p-slt",
+  "rv32ui-p-slti",
+  "rv32ui-p-sltu",
+  "rv32ui-p-sltiu",
+  "rv32ui-p-lui",
+  "rv32ui-p-auipc",
 }
 
 local function read(path)
