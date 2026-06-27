@@ -10,9 +10,21 @@
 #define TESTNUM gp
 
 // trap causes we care about (from the RISC-V priv spec)
+#define CAUSE_MISALIGNED_FETCH 0x0
+#define CAUSE_ILLEGAL_INSTRUCTION 0x2
+#define CAUSE_BREAKPOINT 0x3
 #define CAUSE_USER_ECALL 0x8
 #define CAUSE_SUPERVISOR_ECALL 0x9
 #define CAUSE_MACHINE_ECALL 0xb
+
+// mstatus fields and privilege levels the rv32mi tests reference. The Hart is
+// M-mode only, so these only need to encode/read back correctly via the CSRs.
+#define MSTATUS_MIE 0x00000008
+#define MSTATUS_MPP 0x00001800
+#define MSTATUS_FS 0x00006000
+#define PRV_U 0
+#define PRV_S 1
+#define PRV_M 3
 
 // TVM selectors only define the (empty) `init` macro; we are always in M-mode,
 // so there is nothing to enable.

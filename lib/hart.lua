@@ -13,7 +13,11 @@ local band, bor, bnot, lsh, rsh, ash, bits =
 local M = {}
 M.__index = M
 
-local MTVEC, MEPC, MCAUSE = 0x305, 0x341, 0x342
+local MTVEC, MEPC, MCAUSE, MTVAL = 0x305, 0x341, 0x342, 0x343
+local MISA = 0x301
+-- misa: MXL=1 (RV32, bits 31:30 = 01) with the I and M extension bits set.
+local MISA_RV32IM = 0x40000000 + 0x100 + 0x1000
+local CAUSE_ILLEGAL = 2
 
 -- 32x32 -> 64-bit unsigned product via 16-bit limbs, so every term stays below
 -- 2^34 and is exact in a double. Returns high, low (each unsigned 32-bit).
@@ -43,7 +47,7 @@ function M.new(mem)
   for i = 0, 31 do
     x[i] = 0
   end
-  return setmetatable({ mem = mem, x = x, pc = 0x80000000, csr = {} }, M)
+  return setmetatable({ mem = mem, x = x, pc = 0x80000000, csr = { [MISA] = MISA_RV32IM } }, M)
 end
 
 function M:load(image)
@@ -74,6 +78,14 @@ function M:step()
     if r ~= 0 then
       x[r] = u32(v)
     end
+  end
+  -- enter a trap: record cause/epc/tval and redirect to mtvec. Returns the new
+  -- pc so the caller can divert npc.
+  local function trap(cause, tval)
+    self.csr[MCAUSE] = cause
+    self.csr[MEPC] = self.pc
+    self.csr[MTVAL] = tval or 0
+    return band(self.csr[MTVEC] or 0, 0xFFFFFFFC)
   end
 
   if op == 0x37 then -- lui
@@ -152,19 +164,28 @@ function M:step()
     end
   elseif op == 0x13 then -- op-imm
     local imm = sext(bits(w, 31, 20), 12)
+    local top = bits(w, 31, 25)
     if f3 == 0 then
       set(rd, u32(x[rs1] + imm))
-    elseif f3 == 1 then
-      set(rd, lsh(x[rs1], bits(w, 24, 20)))
+    elseif f3 == 1 then -- slli: RV32 shamt is 5 bits, so funct7 must be 0
+      if top ~= 0 then
+        npc = trap(CAUSE_ILLEGAL, w)
+      else
+        set(rd, lsh(x[rs1], bits(w, 24, 20)))
+      end
     elseif f3 == 2 then
       set(rd, signed(x[rs1]) < signed(imm) and 1 or 0)
     elseif f3 == 3 then
       set(rd, x[rs1] < u32(imm) and 1 or 0)
     elseif f3 == 4 then
       set(rd, rv.bxor(x[rs1], u32(imm)))
-    elseif f3 == 5 then
+    elseif f3 == 5 then -- srli/srai: funct7 must be 0 or 0x20
       local sh = bits(w, 24, 20)
-      set(rd, bits(w, 30, 30) == 1 and ash(x[rs1], sh) or rsh(x[rs1], sh))
+      if top ~= 0 and top ~= 0x20 then
+        npc = trap(CAUSE_ILLEGAL, w)
+      else
+        set(rd, bits(w, 30, 30) == 1 and ash(x[rs1], sh) or rsh(x[rs1], sh))
+      end
     elseif f3 == 6 then
       set(rd, bor(x[rs1], u32(imm)))
     elseif f3 == 7 then
@@ -231,9 +252,9 @@ function M:step()
     end
   elseif op == 0x73 then -- system
     if w == 0x00000073 or w == 0x00100073 then -- ecall / ebreak
-      self.csr[MCAUSE] = (w == 0x73) and 11 or 3 -- machine ecall / breakpoint
-      self.csr[MEPC] = self.pc
-      npc = band(self.csr[MTVEC] or 0, 0xFFFFFFFC)
+      npc = trap((w == 0x73) and 11 or 3, 0) -- machine ecall / breakpoint
+    elseif w == 0x30200073 then -- mret: return to mepc (M-mode only, no priv switch)
+      npc = u32(self.csr[MEPC] or 0)
     else -- Zicsr
       local c = bits(w, 31, 20)
       local old = self.csr[c] or 0

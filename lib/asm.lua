@@ -62,14 +62,23 @@ for i, n in ipairs(ABI) do
 end
 
 local CSR = {
+  misa = 0x301,
   mstatus = 0x300,
+  medeleg = 0x302,
+  mideleg = 0x303,
   mie = 0x304,
   mtvec = 0x305,
+  mcounteren = 0x306,
+  scounteren = 0x106,
   mscratch = 0x340,
   mepc = 0x341,
   mcause = 0x342,
   mtval = 0x343,
   mip = 0x344,
+  cycle = 0xC00,
+  mvendorid = 0xF11,
+  marchid = 0xF12,
+  mimpid = 0xF13,
   mhartid = 0xF14,
 }
 
@@ -96,6 +105,11 @@ local function evalexpr(s, sym, weak)
   end
   local function number()
     ws()
+    local cc = s:match("^'(.)'", pos) -- character constant, e.g. 'A'
+    if cc then
+      pos = pos + 3
+      return u32(string.byte(cc))
+    end
     local h = s:match("^0[xX](%x+)", pos)
     if h then
       pos = pos + 2 + #h
@@ -460,6 +474,13 @@ function M.assemble(src)
       emit(function(_, _, _, here)
         return eB(0x63, f3, rs1, 0, tf(here) - here)
       end)
+    elseif m == "ble" or m == "bgt" or m == "bleu" or m == "bgtu" then
+      -- a <= b is b >= a, a > b is b < a: same op with operands swapped
+      local f3 = ({ ble = 5, bgt = 4, bleu = 7, bgtu = 6 })[m]
+      local rs1, rs2, tf = reg(o[2]), reg(o[1]), targetfn(o[3])
+      emit(function(_, _, _, here)
+        return eB(0x63, f3, rs1, rs2, tf(here) - here)
+      end)
     elseif m == "j" then
       local tf = targetfn(o[1])
       emit(function(_, _, _, here)
@@ -552,6 +573,24 @@ function M.assemble(src)
       emit(function()
         return eI(0x73, f3, rd, rs, c)
       end)
+    elseif m == "csrrwi" or m == "csrrsi" or m == "csrrci" then
+      local f3 = ({ csrrwi = 5, csrrsi = 6, csrrci = 7 })[m]
+      local rd, c, zimm = reg(o[1]), csrnum(o[2]), band(evalexpr(o[3], sym, weak), 0x1F)
+      emit(function()
+        return eI(0x73, f3, rd, zimm, c)
+      end)
+    elseif m == "csrs" or m == "csrc" then -- pseudo: csrr[sc] x0, csr, rs
+      local f3 = m == "csrs" and 2 or 3
+      local c, rs = csrnum(o[1]), reg(o[2])
+      emit(function()
+        return eI(0x73, f3, 0, rs, c)
+      end)
+    elseif m == "csrsi" or m == "csrci" then -- pseudo: csrr[sc]i x0, csr, imm
+      local f3 = m == "csrsi" and 6 or 7
+      local c, zimm = csrnum(o[1]), band(evalexpr(o[2], sym, weak), 0x1F)
+      emit(function()
+        return eI(0x73, f3, 0, zimm, c)
+      end)
     elseif m == "fence" then
       emit(function()
         return 0x0FF0000F
@@ -560,13 +599,21 @@ function M.assemble(src)
       emit(function()
         return 0x0000100F
       end)
-    elseif m == "ecall" then
+    elseif m == "ecall" or m == "scall" then
       emit(function()
         return 0x00000073
       end)
-    elseif m == "ebreak" then
+    elseif m == "ebreak" or m == "sbreak" then
       emit(function()
         return 0x00100073
+      end)
+    elseif m == "mret" then
+      emit(function()
+        return 0x30200073
+      end)
+    elseif m == "wfi" then -- no async interrupts in our model: a nop
+      emit(function()
+        return 0x10500073
       end)
     elseif m == "unimp" then
       emit(function()

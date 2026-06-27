@@ -177,6 +177,11 @@ INI
       echo "== expand rv32ui/rv32um sources to flat .s (cpp + custom M-mode env) =="
       find "$GEN_OUT" -name '*.s' -delete 2>/dev/null || true
       mkdir -p "$GEN_OUT"
+      # rv32mi is vendored selectively: the M-mode tests our RV32IM_Zicsr core
+      # can pass. The rest (misalign-trap variants conflict with rv32ui ma_data;
+      # pmpaddr/breakpoint/instret_overflow/zicntr need out-of-scope extensions)
+      # are deliberately omitted -- see ADR-0004 and the slice #7 note.
+      mi_tests="csr mcsr scall sbreak shamt"
       nix shell nixpkgs#gcc -c bash -c '
         set -e
         for fam in rv32ui rv32um; do
@@ -186,6 +191,11 @@ INI
               -I "$GEN_ENV" -I "$GEN_ISA/macros/scalar" \
               "$src" > "$GEN_OUT/$fam-p-$name.s"
           done
+        done
+        for name in '"$mi_tests"'; do
+          cpp -E -P -nostdinc -D__riscv_xlen=32 \
+            -I "$GEN_ENV" -I "$GEN_ISA/macros/scalar" \
+            "$GEN_ISA/rv32mi/$name.S" > "$GEN_OUT/rv32mi-p-$name.s"
         done
       '
       echo "wrote $(ls "$GEN_OUT"/*.s | wc -l) .s fixtures (riscv-tests @ $rev)"

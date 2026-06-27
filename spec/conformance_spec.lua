@@ -64,6 +64,15 @@ local ALLOW = {
   "rv32um-p-divu",
   "rv32um-p-rem",
   "rv32um-p-remu",
+  -- #7 M-mode CSR/trap core: mret, mstatus/MPP, illegal trap, misa/mhartid.
+  -- The misalign-trap variants (ma_addr, *-misaligned) conflict with the
+  -- already-green rv32ui ma_data, and pmpaddr/breakpoint/instret_overflow/
+  -- zicntr need out-of-scope extensions -- both groups stay descoped.
+  "rv32mi-p-csr",
+  "rv32mi-p-mcsr",
+  "rv32mi-p-scall",
+  "rv32mi-p-sbreak",
+  "rv32mi-p-shamt",
 }
 
 local function read(path)
