@@ -15,6 +15,29 @@ M.__index = M
 
 local MTVEC, MEPC, MCAUSE = 0x305, 0x341, 0x342
 
+-- 32x32 -> 64-bit unsigned product via 16-bit limbs, so every term stays below
+-- 2^34 and is exact in a double. Returns high, low (each unsigned 32-bit).
+local function mul64u(a, b)
+  local a0, a1 = a % 65536, math.floor(a / 65536)
+  local b0, b1 = b % 65536, math.floor(b / 65536)
+  local p00 = a0 * b0
+  local mid = math.floor(p00 / 65536) + a0 * b1 + a1 * b0
+  local lo = p00 % 65536 + (mid % 65536) * 65536
+  local hi = a1 * b1 + math.floor(mid / 65536)
+  return hi, lo
+end
+
+-- exact floor(a/b) for non-negative integers, correcting any double rounding.
+local function udiv(a, b)
+  local q = math.floor(a / b)
+  if (q + 1) * b <= a then
+    q = q + 1
+  elseif q * b > a then
+    q = q - 1
+  end
+  return q
+end
+
 function M.new(mem)
   local x = {}
   for i = 0, 31 do
@@ -149,11 +172,47 @@ function M:step()
     end
   elseif op == 0x33 then -- op
     local f7 = bits(w, 31, 25)
-    if f7 == 1 then
-      error("M extension (mul/div) lands in slice #6")
-    end
     local a, b = x[rs1], x[rs2]
-    if f3 == 0 then
+    if f7 == 1 then -- M extension: mul/div/rem
+      if f3 == 0 then -- mul (low 32)
+        local _, lo = mul64u(a, b)
+        set(rd, lo)
+      elseif f3 <= 3 then -- mulh / mulhsu / mulhu (high 32)
+        local hi = mul64u(a, b)
+        if f3 ~= 3 and a >= 0x80000000 then -- subtract b when a is signed-negative
+          hi = hi - b
+        end
+        if f3 == 1 and b >= 0x80000000 then -- mulh: also when b is negative
+          hi = hi - a
+        end
+        set(rd, u32(hi))
+      elseif f3 == 4 then -- div (signed, truncate toward zero)
+        local sa, sb = signed(a), signed(b)
+        if sb == 0 then
+          set(rd, 0xFFFFFFFF)
+        elseif sa == -0x80000000 and sb == -1 then
+          set(rd, 0x80000000) -- overflow
+        else
+          local q = udiv(sa < 0 and -sa or sa, sb < 0 and -sb or sb)
+          set(rd, (sa < 0) ~= (sb < 0) and u32(-q) or u32(q))
+        end
+      elseif f3 == 5 then -- divu
+        set(rd, b == 0 and 0xFFFFFFFF or udiv(a, b))
+      elseif f3 == 6 then -- rem (signed, sign of dividend)
+        local sa, sb = signed(a), signed(b)
+        if sb == 0 then
+          set(rd, a)
+        elseif sa == -0x80000000 and sb == -1 then
+          set(rd, 0)
+        else
+          local q = udiv(sa < 0 and -sa or sa, sb < 0 and -sb or sb)
+          q = (sa < 0) ~= (sb < 0) and -q or q
+          set(rd, u32(sa - q * sb))
+        end
+      else -- remu
+        set(rd, b == 0 and a or u32(a - udiv(a, b) * b))
+      end
+    elseif f3 == 0 then
       set(rd, f7 == 0x20 and u32(a - b) or u32(a + b))
     elseif f3 == 1 then
       set(rd, lsh(a, band(b, 0x1F)))

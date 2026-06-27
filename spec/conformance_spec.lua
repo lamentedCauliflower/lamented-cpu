@@ -55,6 +55,15 @@ local ALLOW = {
   "rv32ui-p-jal",
   "rv32ui-p-jalr",
   "rv32ui-p-fence_i",
+  -- #9 M extension
+  "rv32um-p-mul",
+  "rv32um-p-mulh",
+  "rv32um-p-mulhsu",
+  "rv32um-p-mulhu",
+  "rv32um-p-div",
+  "rv32um-p-divu",
+  "rv32um-p-rem",
+  "rv32um-p-remu",
 }
 
 local function read(path)

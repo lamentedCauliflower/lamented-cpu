@@ -193,9 +193,14 @@ local function evalexpr(s, sym, weak)
         left = u32(left - right)
       elseif op == "<<" then
         -- assembler const-expr shift, NOT the 5-bit-masked instruction shift:
-        -- `1 << 32` must overflow to 0 so `(1 << 32) - 1` yields 0xFFFFFFFF.
-        -- ponytail: loses precision once right > 52; fine for test exprs.
-        left = u32(left * 2 ^ right)
+        -- `1 << 32` overflows to 0 so `(1 << 32) - 1` yields 0xFFFFFFFF. Mask the
+        -- surviving low bits first so the product stays exact in a double (a wide
+        -- left operand like `-1 << 31` would otherwise round).
+        if right >= 32 then
+          left = 0
+        else
+          left = u32(band(left, 2 ^ (32 - right) - 1) * 2 ^ right)
+        end
       elseif op == ">>" then
         left = right >= 32 and 0 or rsh(left, right)
       elseif op == "&" then
@@ -374,6 +379,15 @@ function M.assemble(src)
     sra = { 5, 0x20 },
     ["or"] = { 6, 0 },
     ["and"] = { 7, 0 },
+    -- M extension (funct7 = 1)
+    mul = { 0, 1 },
+    mulh = { 1, 1 },
+    mulhsu = { 2, 1 },
+    mulhu = { 3, 1 },
+    div = { 4, 1 },
+    divu = { 5, 1 },
+    rem = { 6, 1 },
+    remu = { 7, 1 },
   }
   local ALUI = { addi = 0, slti = 2, sltiu = 3, xori = 4, ori = 6, andi = 7 }
   local BR = { beq = 0, bne = 1, blt = 4, bge = 5, bltu = 6, bgeu = 7 }
