@@ -27,6 +27,9 @@ function M:load(image)
   for addr, word in pairs(image.words) do
     self.mem:w32(addr, word)
   end
+  for addr, byte in pairs(image.bytes or {}) do
+    self.mem:wb(addr, byte)
+  end
   self.pc = image.entry or self.pc
   self.watch = image.symbols and image.symbols.tohost
 end
@@ -97,20 +100,32 @@ function M:step()
     if take then
       npc = u32(self.pc + off)
     end
-  elseif op == 0x03 then -- loads
+  elseif op == 0x03 then -- loads (misaligned handled, not trapped: see mem.lua)
     local addr = u32(x[rs1] + sext(bits(w, 31, 20), 12))
-    if f3 == 2 then -- lw
+    if f3 == 0 then -- lb
+      set(rd, sext(self.mem:rb(addr), 8))
+    elseif f3 == 1 then -- lh
+      set(rd, sext(self.mem:r16(addr), 16))
+    elseif f3 == 2 then -- lw
       set(rd, self.mem:r32(addr))
+    elseif f3 == 4 then -- lbu
+      set(rd, self.mem:rb(addr))
+    elseif f3 == 5 then -- lhu
+      set(rd, self.mem:r16(addr))
     else
-      error("byte/halfword loads land in slice #4")
+      error("bad load funct3")
     end
   elseif op == 0x23 then -- stores
     local imm = sext(lsh(bits(w, 31, 25), 5) + bits(w, 11, 7), 12)
     local addr = u32(x[rs1] + imm)
-    if f3 == 2 then -- sw
+    if f3 == 0 then -- sb
+      self.mem:wb(addr, x[rs2])
+    elseif f3 == 1 then -- sh
+      self.mem:w16(addr, x[rs2])
+    elseif f3 == 2 then -- sw (store32 also drives the tohost watch)
       self:store32(addr, x[rs2])
     else
-      error("byte/halfword stores land in slice #4")
+      error("bad store funct3")
     end
   elseif op == 0x13 then -- op-imm
     local imm = sext(bits(w, 31, 20), 12)

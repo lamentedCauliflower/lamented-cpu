@@ -33,6 +33,18 @@ local ALLOW = {
   "rv32ui-p-sltiu",
   "rv32ui-p-lui",
   "rv32ui-p-auipc",
+  -- #5 RV32I load/store (misaligned handled in-hardware, not trapped)
+  "rv32ui-p-lb",
+  "rv32ui-p-lbu",
+  "rv32ui-p-lh",
+  "rv32ui-p-lhu",
+  "rv32ui-p-lw",
+  "rv32ui-p-sb",
+  "rv32ui-p-sh",
+  "rv32ui-p-sw",
+  "rv32ui-p-ld_st",
+  "rv32ui-p-st_ld",
+  "rv32ui-p-ma_data",
 }
 
 local function read(path)

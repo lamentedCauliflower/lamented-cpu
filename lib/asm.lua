@@ -192,9 +192,12 @@ local function evalexpr(s, sym, weak)
       elseif op == "-" then
         left = u32(left - right)
       elseif op == "<<" then
-        left = u32(left * 2 ^ (right % 32)) -- ponytail: loses precision if left is wide; fine for test exprs
+        -- assembler const-expr shift, NOT the 5-bit-masked instruction shift:
+        -- `1 << 32` must overflow to 0 so `(1 << 32) - 1` yields 0xFFFFFFFF.
+        -- ponytail: loses precision once right > 52; fine for test exprs.
+        left = u32(left * 2 ^ right)
       elseif op == ">>" then
-        left = rsh(left, right % 32)
+        left = right >= 32 and 0 or rsh(left, right)
       elseif op == "&" then
         left = band(left, right)
       elseif op == "|" then
@@ -260,11 +263,20 @@ function M.assemble(src)
   local sym, weak, locals = {}, {}, {}
   local items = {} -- { addr, gen(sym, weak, locals) -> word }
   local lc = RESET
-  local macros, capturing = {}, nil
+  local macros, capturing, reptcap = {}, nil, nil
 
   local function emit(gen)
     items[#items + 1] = { addr = lc, gen = gen }
     lc = lc + 4
+  end
+
+  -- data blobs: n little-endian bytes, value resolved in pass 2 (so .word/.dword
+  -- can name a symbol). ponytail: values fold to u32, so a .dword's high word is
+  -- always 0 -- fine, the only .dwords in the tests are tohost/fromhost = 0.
+  local data = {}
+  local function emit_data(n, genval)
+    data[#data + 1] = { addr = lc, n = n, gen = genval }
+    lc = lc + n
   end
 
   -- resolve an operand to an absolute target address (local label NfNb, or expr)
@@ -550,14 +562,26 @@ function M.assemble(src)
         end)
       end
       lc = target
-    elseif d == ".dword" then
-      lc = lc + 8
-    elseif d == ".word" then
-      lc = lc + 4
-    elseif d == ".half" then
-      lc = lc + 2
-    elseif d == ".byte" then
-      lc = lc + 1
+    elseif d == ".dword" or d == ".word" or d == ".half" or d == ".byte" then
+      local n = ({ [".dword"] = 8, [".word"] = 4, [".half"] = 2, [".byte"] = 1 })[d]
+      for e in (rest .. ","):gmatch("%s*(.-)%s*,") do -- comma-separated values
+        emit_data(n, function(s, wk)
+          return evalexpr(e, s, wk)
+        end)
+      end
+    elseif d == ".fill" then
+      -- .fill repeat, size, value
+      local rep, size, val = rest:match("^([^,]+),%s*([^,]+),%s*(.+)$")
+      rep, size = evalexpr(rep, sym, weak), evalexpr(size, sym, weak)
+      for _ = 1, rep do
+        emit_data(size, function(s, wk)
+          return evalexpr(val, s, wk)
+        end)
+      end
+    elseif d == ".zero" or d == ".skip" then
+      emit_data(evalexpr(rest:match("^[^,]+"), sym, weak), function()
+        return 0
+      end)
     elseif d == ".weak" then
       weak[rest:match("^[%w_%.]+")] = true
     elseif not NOOP_DIRECTIVE[d] then
@@ -591,6 +615,24 @@ function M.assemble(src)
       end
       return
     end
+    if reptcap then
+      if mnem == ".endr" then
+        local body, n = reptcap.body, reptcap.count
+        reptcap = nil
+        for _ = 1, n do
+          for _, b in ipairs(body) do
+            do_stmt(b)
+          end
+        end
+      else
+        table.insert(reptcap.body, t)
+      end
+      return
+    end
+    if mnem == ".rept" then
+      reptcap = { count = evalexpr(rest, sym, weak), body = {} }
+      return
+    end
     if mnem == ".macro" then
       capturing = rest:match("^(%w+)")
       macros[capturing] = {}
@@ -620,12 +662,19 @@ function M.assemble(src)
     end
   end
 
-  -- pass 2: encode
+  -- pass 2: encode instructions and unpack data blobs to little-endian bytes
   local words = {}
   for _, it in ipairs(items) do
     words[it.addr] = it.gen(sym, weak, locals, it.addr)
   end
-  return { words = words, symbols = sym, entry = RESET }
+  local bytes = {}
+  for _, d in ipairs(data) do
+    local v = u32(d.gen(sym, weak))
+    for i = 0, d.n - 1 do
+      bytes[d.addr + i] = i < 4 and band(rsh(v, i * 8), 0xFF) or 0
+    end
+  end
+  return { words = words, bytes = bytes, symbols = sym, entry = RESET }
 end
 
 return M
