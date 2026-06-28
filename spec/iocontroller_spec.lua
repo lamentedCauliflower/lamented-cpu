@@ -3,6 +3,7 @@
 -- no engine.
 local Mem = require("mem")
 local io = require("iocontroller")
+local SignalMap = require("signalmap")
 
 local function read_snapshot(mem)
   local n = mem:r32(io.BASE + io.SNAPSHOT)
@@ -92,5 +93,76 @@ describe("controller Sample", function()
     io.sample(mem, { red = red }, 1) -- overflow
     io.sample(mem, { red = { [1] = 1 } }, 1) -- fits
     assert.are.equal(0, status(mem) % 2)
+  end)
+end)
+
+local function write_staging(mem, list)
+  mem:w32(io.BASE + io.STAGING, #list)
+  for i, p in ipairs(list) do
+    local at = io.BASE + io.STAGING + 4 + (i - 1) * 8
+    mem:w32(at, p.id)
+    mem:w32(at + 4, p.value)
+  end
+end
+
+describe("controller Commit", function()
+  local map, a, b, c
+  before_each(function()
+    map = SignalMap.new()
+    a = map:lookup_or_alloc("item", "iron-plate")
+    b = map:lookup_or_alloc("virtual-signal", "signal-A")
+    c = map:lookup_or_alloc("fluid", "water")
+  end)
+
+  it("flushes the whole multi-signal staging set atomically, in order", function()
+    local mem = Mem.new()
+    write_staging(mem, { { id = a, value = 10 }, { id = b, value = 20 }, { id = c, value = 30 } })
+    local set = io.commit(mem, map)
+    assert.are.same({
+      { id = a, type = "item", name = "iron-plate", value = 10 },
+      { id = b, type = "virtual-signal", name = "signal-A", value = 20 },
+      { id = c, type = "fluid", name = "water", value = 30 },
+    }, set)
+  end)
+
+  it("signs values", function()
+    local mem = Mem.new()
+    write_staging(mem, { { id = a, value = 0xFFFFFFFF } })
+    assert.are.equal(-1, io.commit(mem, map)[1].value)
+  end)
+
+  it("drops a staged id absent from the reverse map and sets STATUS bit1", function()
+    local mem = Mem.new()
+    write_staging(mem, { { id = a, value = 1 }, { id = 9999, value = 2 } })
+    local set = io.commit(mem, map)
+    assert.are.equal(1, #set) -- the unmapped id is gone
+    assert.are.equal(a, set[1].id)
+    assert.are.equal(1, math.floor(status(mem) / 2) % 2) -- bit1 set
+  end)
+
+  it("a clean Commit clears a previously-set drop bit", function()
+    local mem = Mem.new()
+    write_staging(mem, { { id = 9999, value = 2 } })
+    io.commit(mem, map) -- drops -> bit1 set
+    write_staging(mem, { { id = a, value = 1 } })
+    io.commit(mem, map) -- clean
+    assert.are.equal(0, math.floor(status(mem) / 2) % 2)
+  end)
+
+  it("Commit leaves the Sample overflow bit untouched", function()
+    local mem = Mem.new()
+    local red = {}
+    for id = 1, 300 do
+      red[id] = id
+    end
+    io.sample(mem, { red = red }, 1) -- sets overflow bit0
+    write_staging(mem, { { id = a, value = 1 } })
+    io.commit(mem, map)
+    assert.are.equal(1, status(mem) % 2) -- overflow bit0 still set
+  end)
+
+  it("an empty staging Commits an empty set (the reset path's output)", function()
+    local mem = Mem.new()
+    assert.are.same({}, io.commit(mem, map))
   end)
 end)

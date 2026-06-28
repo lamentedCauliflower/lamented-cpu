@@ -16,7 +16,8 @@
 local rv = require("lib.rvbit")
 local band, bor, bnot, u32, signed = rv.band, rv.bor, rv.bnot, rv.u32, rv.signed
 
-local STATUS_OVERFLOW = 1 -- bit0
+local STATUS_OVERFLOW = 1 -- bit0: last Sample truncated
+local STATUS_DROP = 2 -- bit1: last Commit dropped an unmapped id
 
 local M = {}
 
@@ -70,18 +71,30 @@ function M.sample(mem, input, colour)
   mem:w32(M.BASE + M.STATUS, overflow and bor(status, STATUS_OVERFLOW) or status)
 end
 
--- Drain the Output staging to a plain set [{ id, value }], signed values. The
--- adapter turns each id back into a SignalID via the Signal map's reverse lookup.
-function M.commit(mem)
+-- Drain the whole Output staging in one read (atomic: the program builds staging
+-- in RAM, invisible, until this single Commit flushes it) to a plain set of
+-- { id, type, name, value } with signed values. Each staged id is resolved through
+-- the Signal map's reverse table; an id absent from it is dropped and STATUS bit1
+-- is set, so the adapter just builds SignalIDs from type/name. RMW preserves the
+-- Sample overflow bit.
+function M.commit(mem, signalmap)
   local n = mem:r32(M.BASE + M.STAGING)
   if n > M.CAP then
     n = M.CAP
   end
-  local set = {}
+  local set, dropped = {}, false
   for i = 1, n do
     local at = M.BASE + M.STAGING + 4 + (i - 1) * 8
-    set[#set + 1] = { id = mem:r32(at), value = signed(mem:r32(at + 4)) }
+    local id = mem:r32(at)
+    local typ, name = signalmap:reverse(id)
+    if typ then
+      set[#set + 1] = { id = id, type = typ, name = name, value = signed(mem:r32(at + 4)) }
+    else
+      dropped = true
+    end
   end
+  local status = band(mem:r32(M.BASE + M.STATUS), bnot(STATUS_DROP))
+  mem:w32(M.BASE + M.STATUS, dropped and bor(status, STATUS_DROP) or status)
   return set
 end
 

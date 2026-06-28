@@ -60,7 +60,7 @@ describe("circuit I/O walking skeleton", function()
       if d.off == io.SAMPLE then
         io.sample(hart.mem, { red = { [aid] = 42 }, green = {} }, d.value)
       elseif d.off == io.COMMIT then
-        captured = io.commit(hart.mem)
+        captured = io.commit(hart.mem, map)
       end
     end
 
@@ -73,7 +73,10 @@ describe("circuit I/O walking skeleton", function()
     end
 
     assert.is_truthy(hart.tohost, "program did not halt")
-    assert.are.same({ { id = aid, value = 42 } }, captured)
+    assert.are.same(
+      { { id = aid, type = "virtual-signal", name = "signal-A", value = 42 } },
+      captured
+    )
   end)
 
   it("resolver is nil-safe: conformance assembly is unchanged", function()

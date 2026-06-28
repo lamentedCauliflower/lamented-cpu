@@ -98,6 +98,9 @@ local function read_input(cpu)
   }
 end
 
+-- Write the committed set onto the hidden output combinator in one assignment, so
+-- the flush is atomic and latches until the next Commit. The set is already
+-- resolved (type/name per entry) and unmapped ids were dropped by the controller.
 local function write_output(cpu, set)
   local out = cpu.outproxy
   if not (out and out.valid) then
@@ -106,19 +109,16 @@ local function write_output(cpu, set)
   local cb = out.get_or_create_control_behavior()
   local section = cb.get_section(1) or cb.add_section()
   local filters = {}
-  for _, pair in ipairs(set) do
-    local typ, name = storage.signalmap:reverse(pair.id)
-    if typ then
-      filters[#filters + 1] = {
-        value = {
-          type = (typ == "virtual-signal") and "virtual" or typ,
-          name = name,
-          quality = "normal",
-          comparator = "=",
-        },
-        min = pair.value,
-      }
-    end
+  for _, s in ipairs(set) do
+    filters[#filters + 1] = {
+      value = {
+        type = (s.type == "virtual-signal") and "virtual" or s.type,
+        name = s.name,
+        quality = "normal",
+        comparator = "=",
+      },
+      min = s.value,
+    }
   end
   section.filters = filters
 end
@@ -134,7 +134,7 @@ local function service_io(cpu)
   if d.off == iocontroller.SAMPLE then
     iocontroller.sample(cpu.hart.mem, read_input(cpu), d.value)
   elseif d.off == iocontroller.COMMIT then
-    write_output(cpu, iocontroller.commit(cpu.hart.mem))
+    write_output(cpu, iocontroller.commit(cpu.hart.mem, storage.signalmap))
   end
 end
 
