@@ -278,7 +278,18 @@ local function eJ(op, rd, off)
 end
 
 ----------------------------------------------------------------------- assemble
-function M.assemble(src)
+function M.assemble(src, resolver)
+  -- Resolve in-game rich-text signal tags to their Signal-map IDs before the two
+  -- passes, so evalexpr never sees a tag (ADR-0006). `resolver(type, name) -> id`
+  -- is injected so asm.lua stays engine-free; it is nil under conformance, leaving
+  -- the riscv-tests path byte-for-byte unchanged.
+  -- ponytail: substitutes every `[type=name]`; type validation and a quality-clause
+  -- error are slice 4 (#14). A bare '[' is otherwise unused in our assembly.
+  if resolver then
+    src = src:gsub("%[([%w%-]+)=([^%]]+)%]", function(typ, name)
+      return tostring(resolver(typ, name))
+    end)
+  end
   local sym, weak, locals = {}, {}, {}
   local items = {} -- { addr, gen(sym, weak, locals) -> word }
   local lc = RESET

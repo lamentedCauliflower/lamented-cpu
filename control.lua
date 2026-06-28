@@ -5,8 +5,11 @@
 local asm = require("lib.asm")
 local Hart = require("lib.hart")
 local Mem = require("lib.mem")
+local iocontroller = require("lib.iocontroller")
+local SignalMap = require("lib.signalmap")
 
 local NAME = "riscv-combinator"
+local OUT = NAME .. "-output"
 local GUI = "riscv-combinator-gui"
 
 local DEFAULT_SRC = [[
@@ -32,16 +35,19 @@ loop:
 tohost: .dword 0
 ]]
 
--- storage.cpus[unit_number] = { entity, source, status, running, hart }
+-- storage.cpus[unit_number] = { entity, source, status, running, hart, outproxy }
 -- storage.viewing[player_index] = unit_number (which cpu's GUI is open)
+-- storage.signalmap = the per-save Signal map (ADR-0006), shared by the Assembler
+--   resolver and the Commit reverse lookup.
 
 local function ensure_tables()
   storage.cpus = storage.cpus or {}
   storage.viewing = storage.viewing or {}
+  storage.signalmap = storage.signalmap or SignalMap.new()
 end
 
 -- Save/load strips metatables; the core objects are plain state, so reattach the
--- Hart and Mem method tables to every persisted hart.
+-- Hart, Mem and Signal-map method tables to every persisted object.
 local function bind_hart(h)
   setmetatable(h, Hart)
   setmetatable(h.mem, Mem)
@@ -56,6 +62,9 @@ script.on_configuration_changed(function()
 end)
 
 script.on_load(function()
+  if storage.signalmap then
+    setmetatable(storage.signalmap, SignalMap)
+  end
   if storage.cpus then
     for _, cpu in pairs(storage.cpus) do
       if cpu.hart then
@@ -65,20 +74,114 @@ script.on_load(function()
   end
 end)
 
+----------------------------------------------------------------- circuit I/O glue
+-- The pure controller (lib/iocontroller) does all the merge/snapshot/staging work;
+-- these adapters are the only Factorio-touching part: read the real input network
+-- into plain red/green {id=value} tables, and write the committed set onto the
+-- hidden output combinator. ponytail: exercised in busted via a fake bridge (the
+-- controller is pure); the live wire reads/writes are verified in-game, not by the
+-- headless load-smoke, which only proves the prototypes and this file load.
+local function read_input(cpu)
+  local e = cpu.entity
+  local function net(connector)
+    local t = {}
+    local cn = e.valid and e.get_circuit_network(connector)
+    for _, s in pairs((cn and cn.signals) or {}) do
+      local id = storage.signalmap:lookup_or_alloc(s.signal.type or "item", s.signal.name)
+      t[id] = s.count
+    end
+    return t
+  end
+  return {
+    red = net(defines.wire_connector_id.combinator_input_red),
+    green = net(defines.wire_connector_id.combinator_input_green),
+  }
+end
+
+local function write_output(cpu, set)
+  local out = cpu.outproxy
+  if not (out and out.valid) then
+    return
+  end
+  local cb = out.get_or_create_control_behavior()
+  local section = cb.get_section(1) or cb.add_section()
+  local filters = {}
+  for _, pair in ipairs(set) do
+    local typ, name = storage.signalmap:reverse(pair.id)
+    if typ then
+      filters[#filters + 1] = {
+        value = {
+          type = (typ == "virtual-signal") and "virtual" or typ,
+          name = name,
+          quality = "normal",
+          comparator = "=",
+        },
+        min = pair.value,
+      }
+    end
+  end
+  section.filters = filters
+end
+
+-- Service one doorbell between Hart steps (one instr/tick): Sample reads the live
+-- wires into the snapshot; Commit drains staging onto the output combinator.
+local function service_io(cpu)
+  local d = cpu.hart.doorbell
+  if not d then
+    return
+  end
+  cpu.hart.doorbell = nil
+  if d.off == iocontroller.SAMPLE then
+    iocontroller.sample(cpu.hart.mem, read_input(cpu), d.value)
+  elseif d.off == iocontroller.COMMIT then
+    write_output(cpu, iocontroller.commit(cpu.hart.mem))
+  end
+end
+
 ----------------------------------------------------------------- entity lifecycle
+-- Place the hidden output combinator on top of the entity and wire it to the
+-- entity's output side, so its committed signals appear on the output wire only.
+local function make_outproxy(e)
+  local out = e.surface.create_entity({
+    name = OUT,
+    position = e.position,
+    force = e.force,
+    create_build_effect_smoke = false,
+  })
+  if not out then
+    return nil
+  end
+  out.destructible = false
+  local function wire(from, to)
+    e.get_wire_connector(from, true).connect_to(out.get_wire_connector(to, true))
+  end
+  wire(defines.wire_connector_id.combinator_output_red, defines.wire_connector_id.circuit_red)
+  wire(defines.wire_connector_id.combinator_output_green, defines.wire_connector_id.circuit_green)
+  return out
+end
+
 local function on_built(event)
   local e = event.entity or event.created_entity
   if not (e and e.valid and e.name == NAME) then
     return
   end
   ensure_tables()
-  storage.cpus[e.unit_number] =
-    { entity = e, source = DEFAULT_SRC, status = "idle", running = false }
+  storage.cpus[e.unit_number] = {
+    entity = e,
+    outproxy = make_outproxy(e),
+    source = DEFAULT_SRC,
+    status = "idle",
+    running = false,
+  }
 end
 
 local function on_removed(event)
   local e = event.entity
   if e and e.unit_number and storage.cpus then
+    local cpu = storage.cpus[e.unit_number]
+    if cpu and cpu.outproxy and cpu.outproxy.valid then
+      cpu.outproxy.destroy()
+    end
     storage.cpus[e.unit_number] = nil
   end
 end
@@ -173,16 +276,21 @@ script.on_event(defines.events.on_gui_click, function(event)
   local frame = game.get_player(event.player_index).gui.screen[GUI]
   if el.name == "riscv_run" then
     cpu.source = frame.source.text
-    local ok, image = pcall(asm.assemble, cpu.source)
+    local resolver = function(typ, name)
+      return storage.signalmap:lookup_or_alloc(typ, name)
+    end
+    local ok, image = pcall(asm.assemble, cpu.source, resolver)
     if not ok then
       cpu.running = false
       cpu.status = "assemble error: " .. tostring(image)
     else
       local h = Hart.new(Mem.new())
+      h.io_base = iocontroller.BASE
       h:load(image)
       cpu.hart = h
       cpu.running = true
       cpu.status = "running"
+      write_output(cpu, {}) -- Assemble & Run resets the output to a clean slate
     end
   else -- riscv_stop
     cpu.running = false
@@ -199,6 +307,9 @@ script.on_event(defines.events.on_tick, function()
   for unit, cpu in pairs(storage.cpus) do
     if cpu.running and cpu.hart then
       local ok, err = pcall(cpu.hart.step, cpu.hart)
+      if ok and cpu.hart.doorbell then
+        ok, err = pcall(service_io, cpu) -- Sample reads wires / Commit drives output
+      end
       if not ok then
         cpu.running = false
         cpu.status = "runtime error: " .. tostring(err)

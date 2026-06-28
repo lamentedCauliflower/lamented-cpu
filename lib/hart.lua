@@ -63,8 +63,21 @@ end
 
 function M:store32(addr, value)
   self.mem:w32(addr, value)
-  if self.watch and addr == self.watch and u32(value) ~= 0 then
-    self.tohost = u32(value)
+  value = u32(value)
+  if self.watch and addr == self.watch and value ~= 0 then
+    self.tohost = value
+  end
+  -- MMIO doorbell watch: generalises the tohost watch (ADR-0005). io_base is nil
+  -- under conformance (load path and hot loads untouched, suite stays green); set
+  -- in-game to the controller's base. A store into the 16-byte register window
+  -- records a doorbell as plain data for the driver to service between steps --
+  -- the same record-and-let-the-host-act shape as tohost, so it stays serialisable
+  -- (no closures in `storage`). Offset disambiguates SAMPLE/COMMIT.
+  if self.io_base then
+    local off = addr - self.io_base
+    if off >= 0 and off < 0x10 then
+      self.doorbell = { off = off, value = value }
+    end
   end
 end
 
