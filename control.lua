@@ -110,13 +110,10 @@ local function write_output(cpu, set)
   local section = cb.get_section(1) or cb.add_section()
   local filters = {}
   for _, s in ipairs(set) do
+    -- s.type is already a SignalID type ("item"/"fluid"/"virtual"): the resolver
+    -- normalises virtual-signal->virtual and the input path uses Factorio's type.
     filters[#filters + 1] = {
-      value = {
-        type = (s.type == "virtual-signal") and "virtual" or s.type,
-        name = s.name,
-        quality = "normal",
-        comparator = "=",
-      },
+      value = { type = s.type, name = s.name, quality = "normal", comparator = "=" },
       min = s.value,
     }
   end

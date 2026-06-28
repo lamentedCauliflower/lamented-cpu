@@ -18,6 +18,42 @@ local M = {}
 
 local RESET = 0x80000000
 
+-- Rich-text signal types we accept, mapped to their SignalID type (ADR-0006).
+-- "virtual-signal" becomes "virtual" so a signal named in source and the same
+-- signal read off the wire (Factorio reports type "virtual") get one Signal-map
+-- id. Other 2.0 types (recipe/entity/space-location/asteroid-chunk/quality) and a
+-- quality clause are rejected for now.
+local SIGNAL_TYPE = { item = "item", fluid = "fluid", ["virtual-signal"] = "virtual" }
+
+-- Replace each `[type=name]` rich-text tag with its resolved decimal id before the
+-- two passes, so the id is a plain integer usable in any expression position and
+-- evalexpr never sees a tag. The resolver is injected (engine-free); nil under
+-- conformance, leaving the riscv-tests path byte-for-byte unchanged.
+local function resolve_tags(src, resolver)
+  return (
+    src:gsub("%[([%w%-]+)=([^%]]+)%]", function(typ, value)
+      local tag = "[" .. typ .. "=" .. value .. "]"
+      if value:find(",") then -- e.g. [item=iron-plate,quality=uncommon]
+        error(
+          "signal tag " .. tag .. ": quality/extra clauses are not supported (quality deferred)"
+        )
+      end
+      local sid = SIGNAL_TYPE[typ]
+      if not sid then
+        error(
+          "signal tag "
+            .. tag
+            .. ": unsupported type '"
+            .. typ
+            .. "' (use item, fluid, or virtual-signal)"
+        )
+      end
+      return tostring(resolver(sid, value))
+    end)
+  )
+end
+M.resolve_tags = resolve_tags
+
 ----------------------------------------------------------------------- tables
 local REG = { fp = 8 }
 for i = 0, 31 do
@@ -279,16 +315,8 @@ end
 
 ----------------------------------------------------------------------- assemble
 function M.assemble(src, resolver)
-  -- Resolve in-game rich-text signal tags to their Signal-map IDs before the two
-  -- passes, so evalexpr never sees a tag (ADR-0006). `resolver(type, name) -> id`
-  -- is injected so asm.lua stays engine-free; it is nil under conformance, leaving
-  -- the riscv-tests path byte-for-byte unchanged.
-  -- ponytail: substitutes every `[type=name]`; type validation and a quality-clause
-  -- error are slice 4 (#14). A bare '[' is otherwise unused in our assembly.
   if resolver then
-    src = src:gsub("%[([%w%-]+)=([^%]]+)%]", function(typ, name)
-      return tostring(resolver(typ, name))
-    end)
+    src = resolve_tags(src, resolver)
   end
   local sym, weak, locals = {}, {}, {}
   local items = {} -- { addr, gen(sym, weak, locals) -> word }

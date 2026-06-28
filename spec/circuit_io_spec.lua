@@ -47,9 +47,10 @@ describe("circuit I/O walking skeleton", function()
     hart.io_base = io.BASE
     hart:load(image)
 
-    -- fake input wire: signal-A = 42 on red. Same map the assembler resolved
-    -- against, so the program's baked id matches the wire's id.
-    local aid = map:lookup_or_alloc("virtual-signal", "signal-A")
+    -- fake input wire: signal-A = 42 on red. Factorio reports virtual signals as
+    -- type "virtual" -- the same key the resolver normalises [virtual-signal=...]
+    -- to -- so the program's baked id matches the wire's id.
+    local aid = map:lookup_or_alloc("virtual", "signal-A")
     local captured
     local function service()
       local d = hart.doorbell
@@ -73,10 +74,7 @@ describe("circuit I/O walking skeleton", function()
     end
 
     assert.is_truthy(hart.tohost, "program did not halt")
-    assert.are.same(
-      { { id = aid, type = "virtual-signal", name = "signal-A", value = 42 } },
-      captured
-    )
+    assert.are.same({ { id = aid, type = "virtual", name = "signal-A", value = 42 } }, captured)
   end)
 
   it("resolver is nil-safe: conformance assembly is unchanged", function()
