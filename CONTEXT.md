@@ -50,12 +50,55 @@ _Avoid_: crt0, bootrom, env/p (except when naming what we replace).
 **Host interface**:
 The channel through which a running Program image signals the outside world. For
 conformance it is the `riscv-tests` HTIF convention — a write to the `tohost` symbol
-halts the Hart and reports pass or the failing test number. In-game the same boundary
-is repurposed to bridge the Hart to Factorio circuit wires.
-_Avoid_: HTIF (in prose — name it "host interface" and mention HTIF once), syscall, MMIO.
+halts the Hart and reports pass or the failing test number. In-game the boundary is
+realized separately as the **Circuit-network controller** (below), a memory-mapped
+device with its own fixed addresses; the conformance `tohost`/`fromhost` symbols are
+not reused for circuit I/O.
+_Avoid_: HTIF (in prose — name it "host interface" and mention HTIF once), syscall.
 
 **tohost / fromhost**:
 The two symbols that make up the conformance Host interface. `tohost` is written by the
 Program image to report results; `fromhost` is the reverse channel. Their addresses
 come from the Assembler's symbol table.
 _Avoid_: Magic address, result register.
+
+## Circuit I/O
+
+How an in-game Program image talks to Factorio's circuit network. Distinct from the
+conformance Host interface above.
+
+**Circuit-network controller**:
+The memory-mapped peripheral that bridges the Hart to Factorio's circuit network — the
+in-game realization of the Host interface. A device at a fixed address that the Program
+image drives with ordinary loads and stores. (Name provisional.)
+_Avoid_: I/O combinator, bridge, virtual combinator.
+
+**Signal map**:
+The save's append-only table assigning each Factorio signal a small integer ID — grown
+when a signal is first seen on a wire or named in source, and never renumbered (so a
+running Program image's baked IDs stay valid). Source names a signal by the game's
+rich-text tag (`[item=processing-unit]`, `[virtual-signal=signal-D]`), which the
+Assembler resolves to the save's ID; programs are thus portable as source, not as images
+(ADR-0004). Basic scope: base prototypes, normal quality; per-quality deferred.
+_Avoid_: Signal table, channel map, datasheet, raw signal index.
+
+**Input snapshot**:
+The frozen copy of the input wires' signals taken at the instant of a Sample. The
+Program image reads from this copy, so the circuit network changing after a Sample
+cannot perturb a computation already in flight.
+_Avoid_: Input buffer, read buffer.
+
+**Output staging**:
+The pending set of signals a Program image builds up before a Commit. It has no effect
+on the circuit network until committed, so partial output is never visible on the wires.
+_Avoid_: Output buffer, write buffer.
+
+**Sample**:
+The trigger that latches the chosen input wire(s) — red, green, or both — into the Input
+snapshot.
+_Avoid_: Read, poll.
+
+**Commit**:
+The trigger that flushes the Output staging atomically onto the controller's output,
+where it becomes visible on the circuit network.
+_Avoid_: Write, flush, publish.
