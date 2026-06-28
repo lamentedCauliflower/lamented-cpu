@@ -15,6 +15,11 @@ devenv.local.yaml
 # direnv
 .direnv
 
+# secrets (Factorio account token for the client build) — keep .env.example
+.env
+.envrc
+!.env.example
+
 # pre-commit
 .pre-commit-config.yaml
 

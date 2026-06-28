@@ -12,6 +12,17 @@ let
   # "bin data" pair for the headless server of a channel.
   headlessPaths = channel:
     "${headlessFor channel}/bin/factorio ${headlessFor channel}/share/factorio/data";
+
+  # The unfree client needs the account username + token passed into the
+  # derivation (nixpkgs factorio does NOT read env vars at runtime). builtins.getEnv
+  # reads them at eval time, so they must be exported BEFORE nix evaluates -- e.g.
+  # via direnv `dotenv .env` in .envrc, or `export $(grep -v '^#' .env | xargs)`
+  # before `devenv shell`. .env-via-dotenv.enable is too late for the build.
+  clientFor = channel:
+    (if channel == "experimental" then pkgs.factorio-experimental else pkgs.factorio).override {
+      username = builtins.getEnv "FACTORIO_USERNAME";
+      token = builtins.getEnv "FACTORIO_TOKEN";
+    };
 in
 {
   options.withGame = lib.mkOption {
@@ -22,11 +33,16 @@ in
 
   options.withClient = lib.mkOption {
     type = lib.types.bool;
-    default = false;
+    default = true;
     description = "Build the full (unfree) game client for `play`. Requires FACTORIO_USERNAME / FACTORIO_TOKEN at build time.";
   };
 
   config = {
+    # Load FACTORIO_USERNAME / FACTORIO_TOKEN (and anything else) from a
+    # gitignored .env, so the unfree client build can authenticate without
+    # exporting secrets by hand. See .env.example.
+    dotenv.enable = true;
+
     # mkDefault so an exported FACTORIO_CHANNEL wins. Client paths (and the
     # unfree client build) only land in env when withClient is true.
     env = {
@@ -37,8 +53,8 @@ in
       # ';;' expands to the compiled-in default so busted's own rocks still load.
       LUA_PATH = "./lib/?.lua;./?.lua;;";
     } // (lib.optionalAttrs config.withClient {
-      FACTORIO_CLIENT_EXPERIMENTAL = "${pkgs.factorio-experimental}/bin/factorio";
-      FACTORIO_CLIENT_STABLE = "${pkgs.factorio}/bin/factorio";
+      FACTORIO_CLIENT_EXPERIMENTAL = "${clientFor "experimental"}/bin/factorio";
+      FACTORIO_CLIENT_STABLE = "${clientFor "stable"}/bin/factorio";
     });
 
     packages = [
