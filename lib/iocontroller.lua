@@ -14,7 +14,9 @@
 -- The two buffers cannot both sit in one +/-2KiB lw/sw window, so programs keep a
 -- base register per region (ADR-0005).
 local rv = require("lib.rvbit")
-local band, u32, signed = rv.band, rv.u32, rv.signed
+local band, bor, bnot, u32, signed = rv.band, rv.bor, rv.bnot, rv.u32, rv.signed
+
+local STATUS_OVERFLOW = 1 -- bit0
 
 local M = {}
 
@@ -26,9 +28,8 @@ M.SNAPSHOT = 0x100
 M.STAGING = 0x800
 M.CAP = 256 -- (id, value) entries per buffer
 
--- ponytail: skeleton merge -- red/green selected by the colour mask, "both" sums
--- same-id values (Factorio's native circuit merge). Full colour/overflow rigor is
--- slice 2 (#12); the cap + STATUS overflow bit are already wired here.
+-- Merge the chosen wires: colour mask bit0 = red, bit1 = green; "both" (3) sums
+-- same-id values across red and green, matching Factorio's native circuit merge.
 local function merge(input, colour)
   local out = {}
   if band(colour, 1) ~= 0 then
@@ -53,9 +54,9 @@ function M.sample(mem, input, colour)
     ids[#ids + 1] = id
   end
   table.sort(ids) -- deterministic snapshot order so programs can scan it
-  local n, overflow = #ids, 0
-  if n > M.CAP then
-    n, overflow = M.CAP, 1
+  local n, overflow = #ids, false
+  if n > M.CAP then -- truncate to the lowest-id CAP entries, flag overflow
+    n, overflow = M.CAP, true
   end
   mem:w32(M.BASE + M.SNAPSHOT, n)
   for i = 1, n do
@@ -63,7 +64,10 @@ function M.sample(mem, input, colour)
     mem:w32(at, ids[i])
     mem:w32(at + 4, u32(merged[ids[i]]))
   end
-  mem:w32(M.BASE + M.STATUS, overflow)
+  -- own STATUS bit0 only; read-modify-write so Commit's drop flag (slice 3)
+  -- survives a later Sample.
+  local status = band(mem:r32(M.BASE + M.STATUS), bnot(STATUS_OVERFLOW))
+  mem:w32(M.BASE + M.STATUS, overflow and bor(status, STATUS_OVERFLOW) or status)
 end
 
 -- Drain the Output staging to a plain set [{ id, value }], signed values. The
