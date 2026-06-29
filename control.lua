@@ -213,18 +213,37 @@ local function resolver()
   end
 end
 
--- gutter text: one line number per source line, the current PC's line marked ">".
--- ponytail: a single label tracks the text-box only if both share a fixed line
--- height; add an fcpu-style monospace text-box style in data.lua and scroll_to the
--- marked line for autoscroll when tuning in-engine (verifiable only in the client).
-local function gutter_text(cpu)
-  local cur = Inspector.current_line(cpu)
-  local out, i = {}, 0
+-- fcpu-style gutter: ONE label per source line in a vertical flow beside the text-box
+-- (a single multi-line label collapses -- Factorio labels are single-line). The
+-- text-box is sized to fit every line so it never scrolls on its own; gutter + box
+-- co-scroll inside the shared scroll-pane, so the numbers can't desync. The PC's line
+-- gets a coloured marker, and Run auto-scrolls to it.
+-- ponytail: LINE_H is the text-box's per-line height in px (fcpu's tuned value for the
+-- default UI scale). If the numbers drift from the code in-engine, nudge LINE_H and the
+-- gutter top_padding -- only the full client can show the alignment, not the load-smoke.
+local LINE_H = 20
+
+local function fill_code(codepane, cpu)
+  local editor = codepane.editor
+  local gutter, box = editor.gutter, editor.source
+  gutter.clear()
+  local n = 0
   for _ in (cpu.source .. "\n"):gmatch("(.-)\n") do
-    i = i + 1
-    out[i] = (i == cur) and (i .. ">") or tostring(i)
+    n = n + 1
   end
-  return table.concat(out, "\n")
+  local cur = Inspector.current_line(cpu)
+  for i = 1, n do
+    local cap = (i == cur) and ("[color=80,160,255]" .. i .. "▶[/color]") or tostring(i)
+    local lbl = gutter.add({ type = "label", name = "g" .. i, caption = cap })
+    lbl.style.height = LINE_H
+    lbl.style.width = 40
+    lbl.style.horizontal_align = "right"
+  end
+  box.read_only = (cpu.mode == "running")
+  box.style.height = math.max(LINE_H + 8, n * LINE_H + 8) -- fit all lines: no inner scroll
+  if cpu.mode == "running" and cur and gutter["g" .. cur] then
+    codepane.scroll_to_element(gutter["g" .. cur], "top-third")
+  end
 end
 
 -- render the register rows into the left scroll-pane (#18). ponytail: clear+rebuild
@@ -319,12 +338,17 @@ local function open_gui(player, unit, cpu)
     switch_state = cpu.enabled and "right" or "left",
   })
   center.add({ type = "label", caption = "Commands" })
-  local code = center.add({ type = "flow", name = "code", direction = "horizontal" })
-  code.add({ type = "label", name = "gutter", caption = gutter_text(cpu) })
-  local box = code.add({ type = "text-box", name = "source", text = cpu.source or "" })
-  box.read_only = (cpu.mode == "running")
+  local codepane = center.add({ type = "scroll-pane", name = "codepane" })
+  codepane.style.maximal_height = 360
+  codepane.style.width = 540
+  local editor = codepane.add({ type = "flow", name = "editor", direction = "horizontal" })
+  local gutter = editor.add({ type = "flow", name = "gutter", direction = "vertical" })
+  gutter.style.vertical_spacing = 0
+  gutter.style.top_padding = 4
+  local box = editor.add({ type = "text-box", name = "source", text = cpu.source or "" })
+  box.word_wrap = false
   box.style.width = 480
-  box.style.height = 360
+  fill_code(codepane, cpu)
   center.add({ type = "label", name = "status", caption = cpu.status or "" })
 
   -- right: memory browser (Inspector 4/5)
@@ -368,8 +392,7 @@ local function refresh(unit)
       local frame = p and p.gui.screen[GUI]
       if frame and frame.valid then
         local c = frame.body.center
-        c.code.gutter.caption = gutter_text(cpu)
-        c.code.source.read_only = (cpu.mode == "running")
+        fill_code(c.codepane, cpu)
         c.status.caption = cpu.status
         c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
         fill_registers(frame.body.left.regs, cpu)
