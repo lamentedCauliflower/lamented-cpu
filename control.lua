@@ -2,11 +2,11 @@
 -- This file holds NO ISA logic (ADR-0001): it owns one Hart per placed
 -- riscv-combinator, drives it one instruction per tick, and surfaces a GUI that
 -- assembles player-written RISC-V assembly into a program image.
-local asm = require("lib.asm")
 local Hart = require("lib.hart")
 local Mem = require("lib.mem")
 local iocontroller = require("lib.iocontroller")
 local SignalMap = require("lib.signalmap")
+local Inspector = require("lib.inspector")
 
 local NAME = "riscv-combinator"
 local OUT = NAME .. "-output"
@@ -35,7 +35,10 @@ loop:
 tohost: .dword 0
 ]]
 
--- storage.cpus[unit_number] = { entity, source, status, running, hart, outproxy }
+-- storage.cpus[unit_number] = an Inspector state table (lib/inspector) plus the
+--   engine handles entity + outproxy. The Inspector functions read/write the state
+--   fields (enabled, mode, dirty, source, status, hart, lines); the adapter owns
+--   entity/outproxy.
 -- storage.viewing[player_index] = unit_number (which cpu's GUI is open)
 -- storage.signalmap = the per-save Signal map (ADR-0006), shared by the Assembler
 --   resolver and the Commit reverse lookup.
@@ -163,13 +166,10 @@ local function on_built(event)
     return
   end
   ensure_tables()
-  storage.cpus[e.unit_number] = {
-    entity = e,
-    outproxy = make_outproxy(e),
-    source = DEFAULT_SRC,
-    status = "idle",
-    running = false,
-  }
+  local cpu = Inspector.new(DEFAULT_SRC)
+  cpu.entity = e
+  cpu.outproxy = make_outproxy(e)
+  storage.cpus[e.unit_number] = cpu
 end
 
 local function on_removed(event)
@@ -203,20 +203,28 @@ for _, ev in pairs(removed) do
 end
 
 ------------------------------------------------------------------------------ gui
-local function refresh_status(unit)
-  local cpu = storage.cpus[unit]
-  if not cpu then
-    return
+-- The Inspector window: three columns -- registers | control panel | memory. This
+-- slice (#17) is the walking skeleton: the side columns are placeholders (#18 fills
+-- registers, #19 memory). The centre is the live control panel -- transport + master
+-- enable + the source editor with a line-number gutter marking the executing line.
+local function resolver()
+  return function(typ, name)
+    return storage.signalmap:lookup_or_alloc(typ, name)
   end
-  for pidx, u in pairs(storage.viewing) do
-    if u == unit then
-      local p = game.get_player(pidx)
-      local frame = p and p.gui.screen[GUI]
-      if frame and frame.valid then
-        frame.status.caption = cpu.status
-      end
-    end
+end
+
+-- gutter text: one line number per source line, the current PC's line marked ">".
+-- ponytail: a single label tracks the text-box only if both share a fixed line
+-- height; add an fcpu-style monospace text-box style in data.lua and scroll_to the
+-- marked line for autoscroll when tuning in-engine (verifiable only in the client).
+local function gutter_text(cpu)
+  local cur = Inspector.current_line(cpu)
+  local out, i = {}, 0
+  for _ in (cpu.source .. "\n"):gmatch("(.-)\n") do
+    i = i + 1
+    out[i] = (i == cur) and (i .. ">") or tostring(i)
   end
+  return table.concat(out, "\n")
 end
 
 local function open_gui(player, unit, cpu)
@@ -230,15 +238,77 @@ local function open_gui(player, unit, cpu)
     caption = "RISC-V Combinator",
   })
   frame.auto_center = true
-  local box = frame.add({ type = "text-box", name = "source", text = cpu.source or "" })
-  box.style.width = 520
+  local body = frame.add({ type = "flow", name = "body", direction = "horizontal" })
+
+  -- left: register viewer placeholder (Inspector 3/5)
+  local left = body.add({
+    type = "frame",
+    name = "left",
+    style = "inside_shallow_frame",
+    direction = "vertical",
+  })
+  left.add({ type = "label", caption = "Registers" })
+
+  -- centre: control panel
+  local center = body.add({
+    type = "frame",
+    name = "center",
+    style = "inside_shallow_frame",
+    direction = "vertical",
+  })
+  local transport = center.add({ type = "flow", name = "transport", direction = "horizontal" })
+  transport.add({ type = "button", name = "riscv_run", caption = "Run" })
+  transport.add({ type = "button", name = "riscv_pause", caption = "Pause" })
+  transport.add({ type = "button", name = "riscv_step", caption = "Step" })
+  transport.add({
+    type = "switch",
+    name = "riscv_enable",
+    left_label_caption = "Off",
+    right_label_caption = "On",
+    switch_state = cpu.enabled and "right" or "left",
+  })
+  center.add({ type = "label", caption = "Commands" })
+  local code = center.add({ type = "flow", name = "code", direction = "horizontal" })
+  code.add({ type = "label", name = "gutter", caption = gutter_text(cpu) })
+  local box = code.add({ type = "text-box", name = "source", text = cpu.source or "" })
+  box.read_only = (cpu.mode == "running")
+  box.style.width = 480
   box.style.height = 360
-  local row = frame.add({ type = "flow", name = "buttons", direction = "horizontal" })
-  row.add({ type = "button", name = "riscv_run", caption = "Assemble & Run" })
-  row.add({ type = "button", name = "riscv_stop", caption = "Stop" })
-  frame.add({ type = "label", name = "status", caption = cpu.status or "" })
+  center.add({ type = "label", name = "status", caption = cpu.status or "" })
+
+  -- right: memory browser placeholder (Inspector 4/5)
+  local right = body.add({
+    type = "frame",
+    name = "right",
+    style = "inside_shallow_frame",
+    direction = "vertical",
+  })
+  right.add({ type = "label", caption = "Mem. Browser" })
+
   storage.viewing[player.index] = unit
   player.opened = frame
+end
+
+-- push live state into every open view of this unit: gutter marker, read-only,
+-- status, switch. Never writes the source text (would fight the typist).
+local function refresh(unit)
+  local cpu = storage.cpus[unit]
+  if not cpu then
+    return
+  end
+  for pidx, u in pairs(storage.viewing) do
+    if u == unit then
+      local p = game.get_player(pidx)
+      local frame = p and p.gui.screen[GUI]
+      if frame and frame.valid then
+        local c = frame.body.center
+        c.code.gutter.caption = gutter_text(cpu)
+        c.code.source.read_only = (cpu.mode == "running")
+        c.status.caption = cpu.status
+        c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
+      end
+    end
+  end
 end
 
 script.on_event(defines.events.on_gui_opened, function(event)
@@ -260,9 +330,11 @@ script.on_event(defines.events.on_gui_closed, function(event)
   end
 end)
 
+-- transport: Run / Pause / Step drive the Inspector core. A run/step that reassembles
+-- resets the latched output to a clean slate first (ADR-0005).
 script.on_event(defines.events.on_gui_click, function(event)
   local el = event.element
-  if not (el and el.valid and (el.name == "riscv_run" or el.name == "riscv_stop")) then
+  if not (el and el.valid) then
     return
   end
   local unit = storage.viewing[event.player_index]
@@ -270,30 +342,49 @@ script.on_event(defines.events.on_gui_click, function(event)
   if not cpu then
     return
   end
-  local frame = game.get_player(event.player_index).gui.screen[GUI]
+  local reassembles = not (cpu.mode == "paused" and not cpu.dirty and cpu.hart)
   if el.name == "riscv_run" then
-    cpu.source = frame.source.text
-    local resolver = function(typ, name)
-      return storage.signalmap:lookup_or_alloc(typ, name)
+    if reassembles then
+      write_output(cpu, {})
     end
-    local ok, image = pcall(asm.assemble, cpu.source, resolver)
-    if not ok then
-      cpu.running = false
-      cpu.status = "assemble error: " .. tostring(image)
-    else
-      local h = Hart.new(Mem.new())
-      h.io_base = iocontroller.BASE
-      h:load(image)
-      cpu.hart = h
-      cpu.running = true
-      cpu.status = "running"
-      write_output(cpu, {}) -- Assemble & Run resets the output to a clean slate
+    Inspector.run(cpu, resolver())
+  elseif el.name == "riscv_step" then
+    if reassembles then
+      write_output(cpu, {})
     end
-  else -- riscv_stop
-    cpu.running = false
-    cpu.status = "stopped"
+    Inspector.step(cpu, resolver())
+  elseif el.name == "riscv_pause" then
+    Inspector.pause(cpu)
+  else
+    return
   end
-  frame.status.caption = cpu.status
+  refresh(unit)
+end)
+
+script.on_event(defines.events.on_gui_switch_state_changed, function(event)
+  local el = event.element
+  if not (el and el.valid and el.name == "riscv_enable") then
+    return
+  end
+  local unit = storage.viewing[event.player_index]
+  local cpu = unit and storage.cpus[unit]
+  if cpu then
+    Inspector.enable(cpu, el.switch_state == "right")
+    refresh(unit)
+  end
+end)
+
+script.on_event(defines.events.on_gui_text_changed, function(event)
+  local el = event.element
+  if not (el and el.valid and el.name == "source") then
+    return
+  end
+  local unit = storage.viewing[event.player_index]
+  local cpu = unit and storage.cpus[unit]
+  if cpu then
+    Inspector.edit(cpu, el.text)
+    refresh(unit)
+  end
 end)
 
 --------------------------------------------------------------- one instr per tick
@@ -302,21 +393,15 @@ script.on_event(defines.events.on_tick, function()
     return
   end
   for unit, cpu in pairs(storage.cpus) do
-    if cpu.running and cpu.hart then
-      local ok, err = pcall(cpu.hart.step, cpu.hart)
-      if ok and cpu.hart.doorbell then
-        ok, err = pcall(service_io, cpu) -- Sample reads wires / Commit drives output
+    if cpu.enabled and cpu.mode == "running" and cpu.hart then
+      Inspector.tick(cpu)
+      if cpu.hart.doorbell then
+        local ok, err = pcall(service_io, cpu) -- Sample reads wires / Commit drives output
+        if not ok then
+          cpu.mode, cpu.status = "error", "io error: " .. tostring(err)
+        end
       end
-      if not ok then
-        cpu.running = false
-        cpu.status = "runtime error: " .. tostring(err)
-        refresh_status(unit)
-      elseif cpu.hart.tohost ~= nil then
-        cpu.running = false
-        local th = cpu.hart.tohost
-        cpu.status = (th == 1) and "halted: pass" or ("halted: tohost=0x%08x"):format(th)
-        refresh_status(unit)
-      end
+      refresh(unit) -- ponytail: refresh every running tick; #20 throttles to ~10 Hz
     end
   end
 end)
