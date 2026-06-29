@@ -102,3 +102,12 @@ _Avoid_: Read, poll.
 The trigger that flushes the Output staging atomically onto the controller's output,
 where it becomes visible on the circuit network.
 _Avoid_: Write, flush, publish.
+
+## Inspector
+
+**Inspector**:
+The in-game debugger GUI for a RISC-V Combinator: one window giving a live, synchronized
+view of a single Hart — the editable assembly source with the currently executing
+instruction's source line marked, the register file, and a memory browser — driven by
+Run / Pause / Step transport over a master On/Off enable.
+_Avoid_: Control panel, debugger window, fcpu panel.
