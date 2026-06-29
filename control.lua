@@ -312,7 +312,7 @@ local function open_gui(player, unit, cpu)
     style = "inside_shallow_frame",
     direction = "vertical",
   })
-  left.style.margin = 8
+  left.style.padding = 8
   local rhead = left.add({ type = "table", column_count = 2 })
   rhead.add({ type = "label", caption = "Register" })
   rhead.add({ type = "label", caption = "Value" })
@@ -327,7 +327,7 @@ local function open_gui(player, unit, cpu)
     style = "inside_shallow_frame",
     direction = "vertical",
   })
-  center.style.margin = 8
+  center.style.padding = 8
   local transport = center.add({ type = "flow", name = "transport", direction = "horizontal" })
   transport.add({ type = "button", name = "riscv_run", caption = "Run" })
   transport.add({ type = "button", name = "riscv_pause", caption = "Pause" })
@@ -360,7 +360,7 @@ local function open_gui(player, unit, cpu)
     style = "inside_shallow_frame",
     direction = "vertical",
   })
-  right.style.margin = 8
+  right.style.padding = 8
   local nav = right.add({ type = "flow", name = "nav", direction = "horizontal" })
   nav.add({
     type = "drop-down",
