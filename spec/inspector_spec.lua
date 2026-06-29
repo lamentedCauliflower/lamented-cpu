@@ -153,3 +153,13 @@ describe("Inspector memory view-model", function()
     assert.are.equal(0x80000010, Inspector.region_base(h, "pc"))
   end)
 end)
+
+describe("Inspector changed-cell diff", function()
+  it("flags only value changes; baseline and no-change flash nothing", function()
+    local prev = { { label = "a", value = "0x1" }, { label = "b", value = "0x2" } }
+    local cur = { { label = "a", value = "0x1" }, { label = "b", value = "0x9" } }
+    assert.are.same({ [2] = true }, Inspector.diff(prev, cur)) -- only b changed
+    assert.are.same({}, Inspector.diff(nil, cur)) -- baseline: nothing
+    assert.are.same({}, Inspector.diff(cur, cur)) -- identical: nothing
+  end)
+end)

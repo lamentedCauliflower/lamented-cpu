@@ -230,16 +230,27 @@ end
 -- render the register rows into the left scroll-pane (#18). ponytail: clear+rebuild
 -- each refresh -- fine for open GUIs at the #20 throttle; switch to in-place caption
 -- updates if it churns. Monospace/right-align is a style ceiling; hex is fixed-width.
+-- a changed value is highlighted for this refresh ("flash = changed since last
+-- refresh"). ponytail: a static recolour, not a timed fade -- a fade would need an
+-- on_tick style tween; the recolour reads fine at the ~10 Hz run cadence.
+local HL = "[color=255,230,120]"
+local function valcap(value, hot)
+  return hot and (HL .. value .. "[/color]") or value
+end
+
 local function fill_registers(pane, cpu)
   pane.clear()
   if not cpu.hart then
     pane.add({ type = "label", caption = "(not assembled)" })
     return
   end
+  local rows = Inspector.registers(cpu.hart)
+  local changed = Inspector.diff(cpu.prev_regs, rows)
+  cpu.prev_regs = rows
   local t = pane.add({ type = "table", name = "t", column_count = 2 })
-  for _, row in ipairs(Inspector.registers(cpu.hart)) do
+  for i, row in ipairs(rows) do
     t.add({ type = "label", caption = row.label })
-    t.add({ type = "label", caption = row.value })
+    t.add({ type = "label", caption = valcap(row.value, changed[i]) })
   end
 end
 
@@ -252,10 +263,13 @@ local function fill_memory(pane, cpu)
     return
   end
   local base = cpu.mem_base or 0x80000000
+  local rows = Inspector.memory_window(cpu.hart.mem, base, MEM_ROWS)
+  local changed = Inspector.diff(cpu.prev_mem, rows)
+  cpu.prev_mem = rows
   local t = pane.add({ type = "table", name = "t", column_count = 2 })
-  for _, row in ipairs(Inspector.memory_window(cpu.hart.mem, base, MEM_ROWS)) do
+  for i, row in ipairs(rows) do
     t.add({ type = "label", caption = row.addr })
-    t.add({ type = "label", caption = row.value })
+    t.add({ type = "label", caption = valcap(row.value, changed[i]) })
   end
 end
 
@@ -400,19 +414,23 @@ script.on_event(defines.events.on_gui_click, function(event)
   if el.name == "riscv_run" then
     if reassembles then
       write_output(cpu, {})
+      cpu.prev_regs, cpu.prev_mem = nil, nil -- post-reset baseline: no whole-file flash
     end
     Inspector.run(cpu, resolver())
   elseif el.name == "riscv_step" then
     if reassembles then
       write_output(cpu, {})
+      cpu.prev_regs, cpu.prev_mem = nil, nil -- post-reset baseline: no whole-file flash
     end
     Inspector.step(cpu, resolver())
   elseif el.name == "riscv_pause" then
     Inspector.pause(cpu)
   elseif el.name == "riscv_memup" then
     cpu.mem_base = math.max(0, (cpu.mem_base or 0x80000000) - MEM_ROWS * 4)
+    cpu.prev_mem = nil
   elseif el.name == "riscv_memdn" then
     cpu.mem_base = (cpu.mem_base or 0x80000000) + MEM_ROWS * 4
+    cpu.prev_mem = nil
   else
     return
   end
@@ -443,6 +461,7 @@ script.on_event(defines.events.on_gui_selection_state_changed, function(event)
   local cpu = unit and storage.cpus[unit]
   if cpu then
     cpu.mem_base = Inspector.region_base(cpu.hart, REGION[el.selected_index] or "program")
+    cpu.prev_mem = nil
     refresh(unit)
   end
 end)
@@ -463,6 +482,7 @@ script.on_event(defines.events.on_gui_text_changed, function(event)
     local a = tonumber((el.text:gsub("^0[xX]", "")), 16)
     if a then
       cpu.mem_base = a - (a % 4)
+      cpu.prev_mem = nil
     end
   end
   refresh(unit)
@@ -475,6 +495,7 @@ script.on_event(defines.events.on_tick, function()
   end
   for unit, cpu in pairs(storage.cpus) do
     if cpu.enabled and cpu.mode == "running" and cpu.hart then
+      local was = cpu.mode
       Inspector.tick(cpu)
       if cpu.hart.doorbell then
         local ok, err = pcall(service_io, cpu) -- Sample reads wires / Commit drives output
@@ -482,7 +503,11 @@ script.on_event(defines.events.on_tick, function()
           cpu.mode, cpu.status = "error", "io error: " .. tostring(err)
         end
       end
-      refresh(unit) -- ponytail: refresh every running tick; #20 throttles to ~10 Hz
+      -- ~10 Hz while running; immediate on a mode change (halt/error) so the final
+      -- state shows at once. Step/Pause/buttons refresh immediately in their handlers.
+      if cpu.mode ~= was or game.tick % 6 == 0 then
+        refresh(unit)
+      end
     end
   end
 end)

@@ -202,4 +202,21 @@ function M.region_base(hart, region)
   return 0x80000000
 end
 
+-- changed-cell diff for the highlight (#20): which rows of `cur` differ in value from
+-- `prev` (writes only). A nil prev is the post-reset/post-nav baseline -- nothing
+-- flashes. Rows are compared by index, so the adapter clears prev on navigation.
+function M.diff(prev, cur)
+  local changed = {}
+  if not prev then
+    return changed
+  end
+  for i, row in ipairs(cur) do
+    local p = prev[i]
+    if p and p.value ~= row.value then
+      changed[i] = true
+    end
+  end
+  return changed
+end
+
 return M
