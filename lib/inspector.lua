@@ -178,4 +178,28 @@ function M.registers(hart)
   return rows
 end
 
+-- memory view-model for the right column (#19): n word rows from base, addresses and
+-- values as 8-digit hex; unwritten memory reads 0 (the Mem is sparse).
+function M.memory_window(mem, base, n)
+  local rows = {}
+  for i = 0, n - 1 do
+    local a = base + i * 4
+    rows[#rows + 1] = { addr = hex(a), value = hex(mem:r32(a)) }
+  end
+  return rows
+end
+
+-- resolve a navigation preset to a base address: io is the fixed device base; stack
+-- and pc follow the live Hart; program (and the fallback) is the reset/load address.
+function M.region_base(hart, region)
+  if region == "io" then
+    return iocontroller.BASE
+  elseif hart and region == "stack" then
+    return hart.x[2]
+  elseif hart and region == "pc" then
+    return hart.pc
+  end
+  return 0x80000000
+end
+
 return M

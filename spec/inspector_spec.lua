@@ -127,3 +127,29 @@ describe("Inspector register view-model", function()
     assert.are.same({ label = "mcause", value = "0x00000007" }, r[37])
   end)
 end)
+
+describe("Inspector memory view-model", function()
+  local Hart = require("hart")
+  local Mem = require("mem")
+
+  it("windows n word rows from base; unwritten reads 0", function()
+    local mem = Mem.new()
+    mem:w32(0x80000000, 0xdeadbeef)
+    mem:w32(0x80000008, 0x2a)
+    local w = Inspector.memory_window(mem, 0x80000000, 4)
+    assert.are.same({ addr = "0x80000000", value = "0xdeadbeef" }, w[1])
+    assert.are.same({ addr = "0x80000004", value = "0x00000000" }, w[2]) -- unwritten
+    assert.are.same({ addr = "0x80000008", value = "0x0000002a" }, w[3])
+    assert.are.same({ addr = "0x8000000c", value = "0x00000000" }, w[4])
+  end)
+
+  it("resolves region presets to base addresses", function()
+    local h = Hart.new(Mem.new())
+    h.x[2] = 0x90000000 -- sp
+    h.pc = 0x80000010
+    assert.are.equal(0x80000000, Inspector.region_base(h, "program"))
+    assert.are.equal(0x10000000, Inspector.region_base(h, "io"))
+    assert.are.equal(0x90000000, Inspector.region_base(h, "stack"))
+    assert.are.equal(0x80000010, Inspector.region_base(h, "pc"))
+  end)
+end)

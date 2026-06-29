@@ -243,6 +243,22 @@ local function fill_registers(pane, cpu)
   end
 end
 
+local MEM_ROWS = 16 -- ponytail: the fixed window IS the virtualization (Factorio has none)
+
+local function fill_memory(pane, cpu)
+  pane.clear()
+  if not cpu.hart then
+    pane.add({ type = "label", caption = "(not assembled)" })
+    return
+  end
+  local base = cpu.mem_base or 0x80000000
+  local t = pane.add({ type = "table", name = "t", column_count = 2 })
+  for _, row in ipairs(Inspector.memory_window(cpu.hart.mem, base, MEM_ROWS)) do
+    t.add({ type = "label", caption = row.addr })
+    t.add({ type = "label", caption = row.value })
+  end
+end
+
 local function open_gui(player, unit, cpu)
   if player.gui.screen[GUI] then
     player.gui.screen[GUI].destroy()
@@ -297,14 +313,29 @@ local function open_gui(player, unit, cpu)
   box.style.height = 360
   center.add({ type = "label", name = "status", caption = cpu.status or "" })
 
-  -- right: memory browser placeholder (Inspector 4/5)
+  -- right: memory browser (Inspector 4/5)
   local right = body.add({
     type = "frame",
     name = "right",
     style = "inside_shallow_frame",
     direction = "vertical",
   })
-  right.add({ type = "label", caption = "Mem. Browser" })
+  local nav = right.add({ type = "flow", name = "nav", direction = "horizontal" })
+  nav.add({
+    type = "drop-down",
+    name = "riscv_region",
+    items = { "Program", "I/O", "Stack", "PC" },
+    selected_index = 1,
+  })
+  nav.add({ type = "textfield", name = "riscv_addr" })
+  nav.add({ type = "button", name = "riscv_memup", caption = "Up" })
+  nav.add({ type = "button", name = "riscv_memdn", caption = "Down" })
+  local mhead = right.add({ type = "table", column_count = 2 })
+  mhead.add({ type = "label", caption = "Address" })
+  mhead.add({ type = "label", caption = "Val." })
+  local mempane = right.add({ type = "scroll-pane", name = "mem" })
+  mempane.style.maximal_height = 360
+  fill_memory(mempane, cpu)
 
   storage.viewing[player.index] = unit
   player.opened = frame
@@ -328,6 +359,7 @@ local function refresh(unit)
         c.status.caption = cpu.status
         c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
         fill_registers(frame.body.left.regs, cpu)
+        fill_memory(frame.body.right.mem, cpu)
       end
     end
   end
@@ -377,6 +409,10 @@ script.on_event(defines.events.on_gui_click, function(event)
     Inspector.step(cpu, resolver())
   elseif el.name == "riscv_pause" then
     Inspector.pause(cpu)
+  elseif el.name == "riscv_memup" then
+    cpu.mem_base = math.max(0, (cpu.mem_base or 0x80000000) - MEM_ROWS * 4)
+  elseif el.name == "riscv_memdn" then
+    cpu.mem_base = (cpu.mem_base or 0x80000000) + MEM_ROWS * 4
   else
     return
   end
@@ -396,17 +432,40 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
   end
 end)
 
-script.on_event(defines.events.on_gui_text_changed, function(event)
+-- memory region preset drop-down: jump the window to program / I/O / stack / pc.
+local REGION = { "program", "io", "stack", "pc" }
+script.on_event(defines.events.on_gui_selection_state_changed, function(event)
   local el = event.element
-  if not (el and el.valid and el.name == "source") then
+  if not (el and el.valid and el.name == "riscv_region") then
     return
   end
   local unit = storage.viewing[event.player_index]
   local cpu = unit and storage.cpus[unit]
   if cpu then
-    Inspector.edit(cpu, el.text)
+    cpu.mem_base = Inspector.region_base(cpu.hart, REGION[el.selected_index] or "program")
     refresh(unit)
   end
+end)
+
+script.on_event(defines.events.on_gui_text_changed, function(event)
+  local el = event.element
+  if not (el and el.valid and (el.name == "source" or el.name == "riscv_addr")) then
+    return
+  end
+  local unit = storage.viewing[event.player_index]
+  local cpu = unit and storage.cpus[unit]
+  if not cpu then
+    return
+  end
+  if el.name == "source" then
+    Inspector.edit(cpu, el.text)
+  else -- riscv_addr: jump to a typed hex address (word-aligned); ignore garbage
+    local a = tonumber((el.text:gsub("^0[xX]", "")), 16)
+    if a then
+      cpu.mem_base = a - (a % 4)
+    end
+  end
+  refresh(unit)
 end)
 
 --------------------------------------------------------------- one instr per tick
