@@ -18,12 +18,17 @@ tohost: .dword 0
 ]]
 
 describe("Inspector transport", function()
-  it("starts stopped, dirty, disabled; transport is inert until enabled", function()
+  it("defaults to On but stopped, and dirty", function()
     local st = Inspector.new(COUNT)
     assert.are.equal("stopped", st.mode)
     assert.is_true(st.dirty)
-    assert.is_false(st.enabled)
-    Inspector.run(st) -- disabled => no-op
+    assert.is_true(st.enabled) -- On by default; idle until Run
+  end)
+
+  it("transport is inert while Off", function()
+    local st = Inspector.new(COUNT)
+    Inspector.enable(st, false)
+    Inspector.run(st) -- Off => no-op
     assert.are.equal("stopped", st.mode)
     assert.is_nil(st.hart)
   end)

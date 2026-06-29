@@ -16,7 +16,7 @@ local M = {}
 
 function M.new(source)
   return {
-    enabled = false,
+    enabled = true, -- default On (master enable); idle until Run
     mode = "stopped",
     dirty = true,
     source = source or "",
