@@ -227,6 +227,22 @@ local function gutter_text(cpu)
   return table.concat(out, "\n")
 end
 
+-- render the register rows into the left scroll-pane (#18). ponytail: clear+rebuild
+-- each refresh -- fine for open GUIs at the #20 throttle; switch to in-place caption
+-- updates if it churns. Monospace/right-align is a style ceiling; hex is fixed-width.
+local function fill_registers(pane, cpu)
+  pane.clear()
+  if not cpu.hart then
+    pane.add({ type = "label", caption = "(not assembled)" })
+    return
+  end
+  local t = pane.add({ type = "table", name = "t", column_count = 2 })
+  for _, row in ipairs(Inspector.registers(cpu.hart)) do
+    t.add({ type = "label", caption = row.label })
+    t.add({ type = "label", caption = row.value })
+  end
+end
+
 local function open_gui(player, unit, cpu)
   if player.gui.screen[GUI] then
     player.gui.screen[GUI].destroy()
@@ -240,14 +256,19 @@ local function open_gui(player, unit, cpu)
   frame.auto_center = true
   local body = frame.add({ type = "flow", name = "body", direction = "horizontal" })
 
-  -- left: register viewer placeholder (Inspector 3/5)
+  -- left: register viewer (Inspector 3/5)
   local left = body.add({
     type = "frame",
     name = "left",
     style = "inside_shallow_frame",
     direction = "vertical",
   })
-  left.add({ type = "label", caption = "Registers" })
+  local rhead = left.add({ type = "table", column_count = 2 })
+  rhead.add({ type = "label", caption = "Register" })
+  rhead.add({ type = "label", caption = "Value" })
+  local regs = left.add({ type = "scroll-pane", name = "regs" })
+  regs.style.maximal_height = 360
+  fill_registers(regs, cpu)
 
   -- centre: control panel
   local center = body.add({
@@ -306,6 +327,7 @@ local function refresh(unit)
         c.code.source.read_only = (cpu.mode == "running")
         c.status.caption = cpu.status
         c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
+        fill_registers(frame.body.left.regs, cpu)
       end
     end
   end

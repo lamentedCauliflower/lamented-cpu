@@ -116,4 +116,66 @@ function M.current_line(st)
   return st.hart and st.lines and st.lines[st.hart.pc] or nil
 end
 
+-- register view-model for the Inspector's left column (#18): x0..x31 by ABI name +
+-- number, then pc, then the CSRs the Hart implements, values as 8-digit hex (x0 is
+-- the hardwired constant zero). ponytail: ABI/CSR names are duplicated from asm.lua's
+-- private tables -- this is the read-only display layer, not the encoder.
+local ABI = {
+  "zero",
+  "ra",
+  "sp",
+  "gp",
+  "tp",
+  "t0",
+  "t1",
+  "t2",
+  "s0",
+  "s1",
+  "a0",
+  "a1",
+  "a2",
+  "a3",
+  "a4",
+  "a5",
+  "a6",
+  "a7",
+  "s2",
+  "s3",
+  "s4",
+  "s5",
+  "s6",
+  "s7",
+  "s8",
+  "s9",
+  "s10",
+  "s11",
+  "t3",
+  "t4",
+  "t5",
+  "t6",
+}
+local CSRS = {
+  { "misa", 0x301 },
+  { "mtvec", 0x305 },
+  { "mepc", 0x341 },
+  { "mcause", 0x342 },
+  { "mtval", 0x343 },
+}
+
+local function hex(v)
+  return ("0x%08x"):format(v)
+end
+
+function M.registers(hart)
+  local rows = {}
+  for i = 0, 31 do
+    rows[#rows + 1] = { label = ABI[i + 1] .. " (x" .. i .. ")", value = hex(hart.x[i]) }
+  end
+  rows[#rows + 1] = { label = "pc", value = hex(hart.pc) }
+  for _, c in ipairs(CSRS) do
+    rows[#rows + 1] = { label = c[1], value = hex(hart.csr[c[2]] or 0) }
+  end
+  return rows
+end
+
 return M

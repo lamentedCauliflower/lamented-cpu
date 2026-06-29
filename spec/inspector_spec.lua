@@ -110,3 +110,20 @@ describe("Inspector transport", function()
     assert.are.equal(h, st.hart) -- untouched on failure
   end)
 end)
+
+describe("Inspector register view-model", function()
+  local Hart = require("hart")
+  local Mem = require("mem")
+
+  it("labels x0..x31 by ABI + number, then pc and CSRs, in hex", function()
+    local h = Hart.new(Mem.new())
+    h.x[10] = 0x2a -- a0 = 42
+    h.pc = 0x80000004
+    h.csr[0x342] = 7 -- mcause
+    local r = Inspector.registers(h)
+    assert.are.same({ label = "zero (x0)", value = "0x00000000" }, r[1]) -- x0 constant
+    assert.are.same({ label = "a0 (x10)", value = "0x0000002a" }, r[11])
+    assert.are.same({ label = "pc", value = "0x80000004" }, r[33])
+    assert.are.same({ label = "mcause", value = "0x00000007" }, r[37])
+  end)
+end)
