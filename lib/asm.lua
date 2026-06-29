@@ -321,10 +321,13 @@ function M.assemble(src, resolver)
   local sym, weak, locals = {}, {}, {}
   local items = {} -- { addr, gen(sym, weak, locals) -> word }
   local lc = RESET
+  local lines = {} -- ponytail: addr -> source line for the Inspector gutter (ADR-0007)
+  local curline = 0
   local macros, capturing, reptcap = {}, nil, nil
 
   local function emit(gen)
     items[#items + 1] = { addr = lc, gen = gen }
+    lines[lc] = curline
     lc = lc + 4
   end
 
@@ -781,7 +784,10 @@ function M.assemble(src, resolver)
   end
 
   -- statement stream: per line, strip comments, split on ';'
+  local lineno = 0
   for line in (src .. "\n"):gmatch("(.-)\n") do
+    lineno = lineno + 1
+    curline = lineno
     line = line:gsub("#.*", "")
     for part in (line .. ";"):gmatch("(.-);") do
       local s = part:match("^%s*(.-)%s*$")
@@ -803,7 +809,7 @@ function M.assemble(src, resolver)
       bytes[d.addr + i] = i < 4 and band(rsh(v, i * 8), 0xFF) or 0
     end
   end
-  return { words = words, bytes = bytes, symbols = sym, entry = RESET }
+  return { words = words, bytes = bytes, symbols = sym, entry = RESET, lines = lines }
 end
 
 return M
