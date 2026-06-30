@@ -114,6 +114,68 @@ local overview = {
   },
 }
 
+local BASIC_PROGRAM = [[
+# A basic program: sum 1..10 into a0, then halt.
+_start:                 # execution begins at the top (pc = 0x80000000)
+  li   a0, 0            # a0 = running sum
+  li   t0, 1            # t0 = counter i
+  li   t1, 10           # t1 = limit n
+loop:
+  add  a0, a0, t0       # sum += i
+  addi t0, t0, 1        # i++
+  ble  t0, t1, loop     # repeat while i <= n
+  la   t2, tohost       # address of the halt symbol
+  sw   a0, 0(t2)        # write the result -> the Hart halts
+1:
+  j    1b               # park here (1b = jump back to the 1: above)
+
+.section .data          # data sits below the code in one flat image
+.align 6
+.global tohost
+tohost: .dword 0        # 8 bytes the program writes to signal "done"
+]]
+
+local program_layout = {
+  id = "program-layout",
+  title = "Anatomy of a Program",
+  blocks = {
+    h1("Anatomy of a Program"),
+    p(
+      "A program is plain RV32IM assembly text. Execution starts at the very first "
+        .. "instruction (the pc resets to 0x80000000) and runs one instruction per tick "
+        .. "until the program halts or faults. Here is a complete one, annotated:"
+    ),
+    code(BASIC_PROGRAM),
+    h2("Comments and labels"),
+    p(
+      "A # begins a comment to the end of the line. A label such as loop: names the "
+        .. "current address; you reference it in branches and jumps. _start is just a "
+        .. "conventional name for the first line -- the Hart starts at the top regardless."
+    ),
+    h2("Halting"),
+    p(
+      "The Hart has no exit instruction. To stop cleanly, write a non-zero value to the "
+        .. "tohost symbol; the Hart halts and the Inspector shows 'halted' (a write of 1 "
+        .. "reports a clean pass). la loads tohost's address, and sw stores to it."
+    ),
+    h2("Numeric labels and the park loop"),
+    p(
+      "Numeric labels like 1: are local and reusable: refer to one as 1f (the next 1: "
+        .. "forward) or 1b (the previous 1: backward). The program ends with 1: j 1b -- a "
+        .. "one-instruction infinite loop that parks the Hart after it has signalled done, "
+        .. "so execution never runs off the end into unwritten memory."
+    ),
+    h2("The data section"),
+    p(
+      "Code and data share one flat image in source order; .section, .data and .text are "
+        .. "ignored except for alignment (see Memory & Execution Model). .align 6 advances "
+        .. "to a 64-byte boundary, .global tohost exports the symbol, and tohost: .dword 0 "
+        .. "reserves eight zero bytes for the program to write. The Assembler Reference "
+        .. "lists every directive."
+    ),
+  },
+}
+
 local registers = {
   id = "registers",
   title = "Register Reference",
@@ -677,6 +739,7 @@ local extensions = {
 
 return {
   overview,
+  program_layout,
   registers,
   register_types,
   instruction_set,

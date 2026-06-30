@@ -18,7 +18,12 @@ describe("Manual IR", function()
   end)
 
   it("flattens a structured-row block to headers + cell matrix", function()
-    local regs = content[2] -- Register Reference
+    local regs -- the Register Reference chapter
+    for _, ch in ipairs(content) do
+      if ch.id == "registers" then
+        regs = ch
+      end
+    end
     local rowblock
     for _, b in ipairs(regs.blocks) do
       if b.kind == "rows" then

@@ -34,7 +34,7 @@ loop:
   la   t2, tohost
   sw   a0, 0(t2)
 1:
-  j    1b
+  j    1b               # park here forever (1b = jump back to the 1: above)
 
 .section .data
 .align 6
