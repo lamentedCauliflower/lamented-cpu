@@ -144,6 +144,19 @@ local function service_io(cpu)
   end
 end
 
+-- Drain a doorbell after a Hart step in ANY transport mode. Run calls this each tick;
+-- Step calls it too, so a Sample/Commit issued by a single stepped instruction still
+-- reaches the wires (otherwise stepping the I/O example never samples). I/O faults park
+-- the cpu in error.
+local function service_doorbell(cpu)
+  if cpu.hart and cpu.hart.doorbell then
+    local ok, err = pcall(service_io, cpu)
+    if not ok then
+      cpu.mode, cpu.status = "error", "io error: " .. tostring(err)
+    end
+  end
+end
+
 ----------------------------------------------------------------- entity lifecycle
 -- Place the hidden output combinator on top of the entity and wire it to the
 -- entity's output side, so its committed signals appear on the output wire only.
@@ -474,6 +487,7 @@ script.on_event(defines.events.on_gui_click, function(event)
       cpu.prev_regs, cpu.prev_mem = nil, nil -- post-reset baseline: no whole-file flash
     end
     Inspector.step(cpu, resolver())
+    service_doorbell(cpu) -- a stepped Sample/Commit still reaches the wires
   elseif el.name == "riscv_pause" then
     if cpu.mode == "paused" then
       Inspector.stop(cpu) -- the paused Pause button acts as Stop (reset)
@@ -552,12 +566,7 @@ script.on_event(defines.events.on_tick, function()
     if cpu.enabled and cpu.mode == "running" and cpu.hart then
       local was = cpu.mode
       Inspector.tick(cpu)
-      if cpu.hart.doorbell then
-        local ok, err = pcall(service_io, cpu) -- Sample reads wires / Commit drives output
-        if not ok then
-          cpu.mode, cpu.status = "error", "io error: " .. tostring(err)
-        end
-      end
+      service_doorbell(cpu) -- Sample reads wires / Commit drives output
       -- ~10 Hz while running; immediate on a mode change (halt/error) so the final
       -- state shows at once. Step/Pause/buttons refresh immediately in their handlers.
       if cpu.mode ~= was or game.tick % 6 == 0 then
