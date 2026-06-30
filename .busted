@@ -6,6 +6,7 @@ return {
   -- Options must live under a task key (e.g. `default`); top-level keys are
   -- read as task names, not options, so lpath would be silently ignored.
   default = {
+    helper = "./spec/helper.lua", -- stubs engine globals (defines/script/storage) before the suite
     lpath = "./lib/?.lua;./?.lua",
     cpath = "./?.so;./lib/?.so",
   },

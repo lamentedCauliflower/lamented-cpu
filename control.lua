@@ -5,6 +5,7 @@
 local Hart = require("lib.hart")
 local Mem = require("lib.mem")
 local iocontroller = require("lib.iocontroller")
+local iobridge = require("lib.iobridge")
 local SignalMap = require("lib.signalmap")
 local Inspector = require("lib.inspector")
 local Manual = require("lib.manual")
@@ -84,50 +85,10 @@ script.on_load(function()
 end)
 
 ----------------------------------------------------------------- circuit I/O glue
--- The pure controller (lib/iocontroller) does all the merge/snapshot/staging work;
--- these adapters are the only Factorio-touching part: read the real input network
--- into plain red/green {id=value} tables, and write the committed set onto the
--- hidden output combinator. ponytail: exercised in busted via a fake bridge (the
--- controller is pure); the live wire reads/writes are verified in-game, not by the
--- headless load-smoke, which only proves the prototypes and this file load.
-local function read_input(cpu)
-  local e = cpu.entity
-  local function net(connector)
-    local t = {}
-    local cn = e.valid and e.get_circuit_network(connector)
-    for _, s in pairs((cn and cn.signals) or {}) do
-      local id = storage.signalmap:lookup_or_alloc(s.signal.type or "item", s.signal.name)
-      t[id] = s.count
-    end
-    return t
-  end
-  return {
-    red = net(defines.wire_connector_id.combinator_input_red),
-    green = net(defines.wire_connector_id.combinator_input_green),
-  }
-end
-
--- Write the committed set onto the hidden output combinator in one assignment, so
--- the flush is atomic and latches until the next Commit. The set is already
--- resolved (type/name per entry) and unmapped ids were dropped by the controller.
-local function write_output(cpu, set)
-  local out = cpu.outproxy
-  if not (out and out.valid) then
-    return
-  end
-  local cb = out.get_or_create_control_behavior()
-  local section = cb.get_section(1) or cb.add_section()
-  local filters = {}
-  for _, s in ipairs(set) do
-    -- s.type is already a SignalID type ("item"/"fluid"/"virtual"): the resolver
-    -- normalises virtual-signal->virtual and the input path uses Factorio's type.
-    filters[#filters + 1] = {
-      value = { type = s.type, name = s.name, quality = "normal", comparator = "=" },
-      min = s.value,
-    }
-  end
-  section.filters = filters
-end
+-- The pure controller (lib/iocontroller) does the merge/snapshot/staging; the engine-
+-- touching reads/writes live in lib/iobridge so they can be driven by a real placed
+-- entity in the in-game black-box test (instrument-control.lua) and mocked in busted.
+-- The live wire reads/writes are verified there, not by the headless load-smoke.
 
 -- Service one doorbell between Hart steps (one instr/tick): Sample reads the live
 -- wires into the snapshot; Commit drains staging onto the output combinator.
@@ -138,9 +99,9 @@ local function service_io(cpu)
   end
   cpu.hart.doorbell = nil
   if d.off == iocontroller.SAMPLE then
-    iocontroller.sample(cpu.hart.mem, read_input(cpu), d.value)
+    iocontroller.sample(cpu.hart.mem, iobridge.read_input(cpu.entity, storage.signalmap), d.value)
   elseif d.off == iocontroller.COMMIT then
-    write_output(cpu, iocontroller.commit(cpu.hart.mem, storage.signalmap))
+    iobridge.write_output(cpu.outproxy, iocontroller.commit(cpu.hart.mem, storage.signalmap))
   end
 end
 
@@ -477,13 +438,13 @@ script.on_event(defines.events.on_gui_click, function(event)
   local reassembles = not (cpu.mode == "paused" and not cpu.dirty and cpu.hart)
   if el.name == "riscv_run" then
     if reassembles then
-      write_output(cpu, {})
+      iobridge.write_output(cpu.outproxy, {})
       cpu.prev_regs, cpu.prev_mem = nil, nil -- post-reset baseline: no whole-file flash
     end
     Inspector.run(cpu, resolver())
   elseif el.name == "riscv_step" then
     if reassembles then
-      write_output(cpu, {})
+      iobridge.write_output(cpu.outproxy, {})
       cpu.prev_regs, cpu.prev_mem = nil, nil -- post-reset baseline: no whole-file flash
     end
     Inspector.step(cpu, resolver())
