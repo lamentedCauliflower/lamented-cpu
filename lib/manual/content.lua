@@ -331,10 +331,138 @@ local pseudo_instructions = {
   },
 }
 
+-- Functions & Calling Convention (#26). Standard RISC-V integer ABI, transferable.
+local FRAME_EXAMPLE = [[
+caller:
+  addi sp, sp, -16     # allocate a 16-byte stack frame
+  sw   ra, 12(sp)      # save the return address (ra is caller-saved)
+  sw   s0, 8(sp)       # save s0 (callee-saved) before reusing it
+  mv   s0, a0          # keep the argument across the call
+  jal  ra, callee      # call; may clobber a0-a7, t0-t6, ra
+  add  a0, a0, s0      # combine the result with the preserved argument
+  lw   ra, 12(sp)      # restore
+  lw   s0, 8(sp)
+  addi sp, sp, 16      # free the frame
+  ret                  # jalr x0, 0(ra)
+callee:
+  ret
+]]
+
+local calling_convention = {
+  id = "calling-convention",
+  title = "Calling Convention",
+  blocks = {
+    h1("Functions & Calling Convention"),
+    p(
+      "This is the standard RISC-V integer calling convention — the same one a "
+        .. "hardware RV32 toolchain uses, so the discipline transfers directly. A call "
+        .. "is jal ra, target (which stores the return address in ra); the callee returns "
+        .. "with ret (jalr x0, 0(ra)). Use jalr for a computed target."
+    ),
+    h2("Arguments and return values"),
+    p(
+      "Integer arguments go in a0–a7, left to right; further arguments spill to the "
+        .. "stack. Results come back in a0 (and a1 for a 64-bit pair). a0–a7 are caller-"
+        .. "saved: a callee may freely overwrite them."
+    ),
+    h2("Who saves what"),
+    p(
+      "Across a call, callee-saved registers keep their value and caller-saved ones may "
+        .. "not. Save anything you need afterwards before calling, and restore any callee-"
+        .. "saved register you reuse."
+    ),
+    tbl({ "Class", "Registers", "Preserved across a call?" }, {
+      { "Callee-saved", "sp, s0–s11", "Yes — the callee restores them" },
+      { "Caller-saved", "ra, t0–t6, a0–a7", "No — save them yourself first" },
+      { "Arguments / return", "a0–a7 (a0, a1 return)", "No" },
+      { "Fixed", "zero, gp, tp", "Not used for passing values" },
+    }),
+    h2("Stack frame, prologue and epilogue"),
+    p(
+      "The stack grows downward; sp stays 16-byte aligned. A non-leaf function opens "
+        .. "with a prologue that allocates a frame and saves ra plus any callee-saved "
+        .. "registers it touches, and closes with the mirror-image epilogue:"
+    ),
+    code(FRAME_EXAMPLE),
+  },
+}
+
+-- Memory & Execution Model (#26). Accurate to lib/mem.lua and lib/asm.lua.
+local memory_model = {
+  id = "memory-model",
+  title = "Memory & Execution Model",
+  blocks = {
+    h1("Memory & Execution Model"),
+    p(
+      "The Hart resets with pc = 0x80000000 and begins executing there; that address is "
+        .. "the entry point of every assembled program. It runs one instruction per game "
+        .. "tick until it writes tohost or faults."
+    ),
+    h2("Address space"),
+    p(
+      "Memory is flat, byte-addressable, sparse, and little-endian. It is zero-filled: "
+        .. "any address never written reads back as 0, so there is no separate data "
+        .. "section to reserve. lw/lh/lb (and the unsigned lhu/lbu) read 32/16/8 bits; "
+        .. "sw/sh/sb write them. The low region around 0x10000000 is the Circuit-network "
+        .. "controller (see Circuit I/O)."
+    ),
+    h2("Alignment — a deliberate deviation"),
+    p(
+      "Real RV32 traps a misaligned load or store. This Hart allows them: a word access "
+        .. "at any address just composes the bytes. This matches the rv32ui-p-ma_data "
+        .. "conformance fixture and means you never need alignment shims, but code that "
+        .. "relies on it will not run on stock hardware."
+    ),
+    h2("Where code and data land"),
+    p(
+      "The Assembler flattens everything into one image in source order. .text, .data, "
+        .. ".section and .pushsection are no-ops except for any .align they carry; only "
+        .. ".align/.p2align move the location counter (padding code gaps with nop). So a "
+        .. ".data label sits immediately after the statement before it, and labels simply "
+        .. "get distinct, aligned addresses counting up from 0x80000000."
+    ),
+  },
+}
+
+-- CSRs & Traps (#26). Only the CSRs the Hart gives meaning to; the rest assemble
+-- but are inert (lib/asm.lua's CSR table is broad; lib/hart.lua honours five).
+local csrs_traps = {
+  id = "csrs-traps",
+  title = "CSRs & Traps",
+  blocks = {
+    h1("CSRs & Traps"),
+    p(
+      "The Hart is machine-mode only with no asynchronous interrupts, so the control and "
+        .. "status registers that matter are the handful the trap path uses. Many more "
+        .. "CSR names assemble (mstatus, mscratch, mie, …), but the Hart attaches no "
+        .. "behaviour to them — they read back whatever was written, or 0. These five "
+        .. "drive real behaviour:"
+    ),
+    tbl({ "CSR", "Role", "Active?" }, {
+      { "misa", "Identifies the ISA; reads as RV32IM", "Read (identification)" },
+      { "mtvec", "Trap-handler base address (direct mode; low bits ignored)", "Active" },
+      { "mepc", "PC saved on trap entry; mret returns here", "Active" },
+      { "mcause", "Cause code of the most recent trap", "Active" },
+      { "mtval", "Faulting value: bad instruction word, else 0", "Active" },
+    }),
+    h2("The trap path"),
+    p(
+      "ecall, ebreak, and an illegal instruction all trap. On a trap the Hart records "
+        .. "the cause in mcause, the current pc in mepc, and the offending value in mtval, "
+        .. "then jumps to mtvec. mret returns to mepc. The cause codes are: 2 = illegal "
+        .. "instruction, 3 = breakpoint (ebreak), 11 = environment call (ecall). There is "
+        .. "no delegation and no interrupt handling — every trap goes straight to mtvec."
+    ),
+  },
+}
+
 return {
   overview,
   registers,
   register_types,
   instruction_set,
   pseudo_instructions,
+  calling_convention,
+  memory_model,
+  csrs_traps,
 }
