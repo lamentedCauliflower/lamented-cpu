@@ -58,11 +58,6 @@ local function as_grid(b)
 end
 M._as_grid = as_grid -- exposed for the spec
 
-local function chapters()
-  return require("lib.manual.content")
-end
-M.chapters = chapters
-
 ----------------------------------------------------------------- Informatron adapter
 local IF = "lamented-cpu" -- interface name == root page_name (the Overview chapter)
 
@@ -80,7 +75,7 @@ end
 -- page itself, so it is deliberately absent here. Tested directly.
 function M.informatron_menu(chs)
   local menu = {}
-  for i, ch in ipairs(chs or chapters()) do
+  for i, ch in ipairs(chs) do
     if i > 1 then
       menu[ch.id] = 1 -- depth 1 = top-level entry
     end
@@ -126,19 +121,22 @@ local function info_block(element, b)
 end
 
 -- Register the Informatron client interface. Must run from the control.lua main
--- chunk (remote.add_interface is load-only). No-op when Informatron is absent so
--- the interface is never even exposed (ADR-0008). Informatron itself scans for
--- this interface and calls back at view time.
-function M.register_informatron()
+-- chunk (remote.add_interface is load-only), and `chs` must be require'd by the
+-- caller there too -- `require` is illegal at runtime, so the menu and page index
+-- are built once now and the callbacks (run at view time) only close over them.
+-- No-op when Informatron is absent (ADR-0008); Informatron scans for this interface.
+function M.register_informatron(chs)
   if not remote.interfaces["informatron"] then
     return
   end
+  local by_page = pages(chs)
+  local menu = M.informatron_menu(chs)
   remote.add_interface(IF, {
     informatron_menu = function()
-      return M.informatron_menu()
+      return menu
     end,
     informatron_page_content = function(data)
-      local ch = pages(chapters())[data.page_name]
+      local ch = by_page[data.page_name]
       if ch then
         for _, b in ipairs(ch.blocks) do
           info_block(data.element, b)
@@ -148,11 +146,11 @@ function M.register_informatron()
     -- give the menu/title readable captions from the chapter title, so content can
     -- stay inline (no locale .cfg, ADR-0008). Harmless if Informatron ignores them.
     informatron_menu_caption_override = function(data)
-      local ch = pages(chapters())[data.page_name]
+      local ch = by_page[data.page_name]
       return ch and ch.title or nil
     end,
     informatron_title_caption_override = function(data)
-      local ch = pages(chapters())[data.page_name]
+      local ch = by_page[data.page_name]
       return ch and ch.title or nil
     end,
   })

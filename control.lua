@@ -10,8 +10,9 @@ local Inspector = require("lib.inspector")
 local Manual = require("lib.manual")
 
 -- The Manual (ADR-0008): expose the Informatron client interface now, at load time
--- (remote.add_interface is load-only). No-op if Informatron is not installed.
-Manual.register_informatron()
+-- (remote.add_interface and require are both load-only). No-op if Informatron is
+-- not installed.
+Manual.register_informatron(require("lib.manual.content"))
 
 local NAME = "riscv-combinator"
 local OUT = NAME .. "-output"
