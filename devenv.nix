@@ -120,8 +120,17 @@ INI
                --create "$save" --map-gen-seed 1
         "$bin" --config .factorio/config.ini --mod-directory .factorio/mods \
                --benchmark "$save" --benchmark-ticks 1
+        echo "== in-game tests ($chan) =="
+        # instrument-control.lua runs only under --instrument-mod: it exercises the
+        # mod in the engine's own Lua VM and the live in-world entity path, erroring
+        # (non-zero exit, no PASSED line) on any failure. Gate on the PASS sentinel.
+        "$bin" --config .factorio/config.ini --mod-directory .factorio/mods \
+               --benchmark "$save" --benchmark-ticks 10 --instrument-mod lamented-cpu \
+          | tee .factorio/ingame.log
+        grep -qF "PASSED: example programs" .factorio/ingame.log \
+          || { echo "in-game tests FAILED (see .factorio/ingame.log)"; exit 1; }
       else
-        echo "== load-smoke skipped (withGame=false) =="
+        echo "== load-smoke + in-game tests skipped (withGame=false) =="
       fi
     '';
 
@@ -159,7 +168,7 @@ INI
     scripts.lint.exec = ''
       # Explicit mod paths: avoid walking .factorio/ (dev sandbox with a
       # symlink back to the repo root). Add your own lua roots here as the mod grows.
-      exec luacheck lib data.lua control.lua
+      exec luacheck lib data.lua control.lua instrument-control.lua
     '';
 
     scripts.fmt.exec = ''

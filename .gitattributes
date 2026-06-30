@@ -20,6 +20,7 @@ devenv.yaml export-ignore
 devenv.lock export-ignore
 .busted export-ignore
 .luacheckrc export-ignore
+instrument-control.lua export-ignore
 .stylua.toml export-ignore
 .luarc.json export-ignore
 spec export-ignore
