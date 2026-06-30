@@ -456,6 +456,94 @@ local csrs_traps = {
   },
 }
 
+-- Circuit I/O (#27): the mod-specific content. Accurate to lib/iocontroller.lua
+-- (the MMIO map, doorbell offsets, CAP, STATUS bits) and lib/signalmap.lua.
+local IO_EXAMPLE = [[
+# Read both input wires, echo the first signal back at double its value.
+  li   s0, 0x10000000   # Circuit-network controller base
+  li   t0, 3
+  sw   t0, 0x004(s0)    # SAMPLE both colours (red | green)
+  lw   t1, 0x100(s0)    # t1 = number of signals sampled
+  beqz t1, done         # nothing on the wires? skip
+  lw   t2, 0x104(s0)    # id    of the first sampled signal
+  lw   t3, 0x108(s0)    # value of the first sampled signal
+  add  t3, t3, t3       # double it
+  li   t0, 1
+  sw   t0, 0x800(s0)    # STAGING count = 1
+  sw   t2, 0x804(s0)    # staged id
+  sw   t3, 0x808(s0)    # staged value
+  sw   zero, 0x008(s0)  # COMMIT -> flush staging onto the output wire
+done:
+  ret
+]]
+
+local circuit_io = {
+  id = "circuit-io",
+  title = "Circuit I/O",
+  blocks = {
+    h1("Circuit I/O"),
+    p(
+      "This is how a program talks to Factorio's circuit network — the one thing this "
+        .. "Hart does that real RISC-V hardware cannot. The Circuit-network controller is "
+        .. "a memory-mapped device at base 0x10000000 that you drive with ordinary loads "
+        .. "and stores. You never wire it up in assembly; you read its snapshot and write "
+        .. "its staging buffer."
+    ),
+    h2("Memory map"),
+    p("All offsets are from the controller base 0x10000000:"),
+    tbl({ "Offset", "Name", "Access", "Meaning" }, {
+      {
+        "0x000",
+        "STATUS",
+        "read",
+        "bit0 = last Sample overflowed; bit1 = last Commit dropped an id",
+      },
+      { "0x004", "SAMPLE", "write", "doorbell; value is the colour mask 1=red, 2=green, 3=both" },
+      { "0x008", "COMMIT", "write", "doorbell; flush the staging buffer (value ignored)" },
+      { "0x100", "SNAPSHOT", "read", "word0 = count, then (id, value) pairs, ascending by id" },
+      { "0x800", "STAGING", "write", "word0 = count, then (id, value) pairs — you fill this" },
+    }),
+    p(
+      "Each buffer holds up to 256 (id, value) pairs. SNAPSHOT and STAGING are 0x700 "
+        .. "bytes apart, too far for a single load/store offset, so keep a base register "
+        .. "per buffer rather than one for both."
+    ),
+    h2("Sample and Commit"),
+    p(
+      "A store to SAMPLE is a doorbell: between instructions the controller latches the "
+        .. "chosen wires into an Input snapshot — a frozen copy. The circuit network "
+        .. "changing afterwards cannot perturb a computation already in flight. With the "
+        .. "'both' mask the two wires are summed per id, matching Factorio's own merge. "
+        .. "You then read SNAPSHOT: word0 is the count, followed by that many id/value "
+        .. "pairs sorted by id. If more than 256 signals were present, the lowest 256 are "
+        .. "kept and STATUS bit0 is set."
+    ),
+    p(
+      "Output works in reverse. You build a set in the Output staging buffer — count "
+        .. "first, then id/value pairs — entirely in RAM, invisible on the wire. A store "
+        .. "to COMMIT flushes the whole set atomically, so partial output never appears. "
+        .. "Any staged id the Signal map cannot resolve is dropped and STATUS bit1 is set."
+    ),
+    code(IO_EXAMPLE),
+    h2("Signals and the Signal map"),
+    p(
+      "Snapshot and staging entries are identified by small integer Signal IDs, not "
+        .. "Factorio signal names. Source names a signal by its rich-text tag — "
+        .. "[item=processing-unit], [fluid=water], [virtual-signal=signal-D] — and the "
+        .. "Assembler resolves each tag to the save's integer ID, baking the number into "
+        .. "the program. Only item, fluid and virtual-signal tags are accepted; quality "
+        .. "clauses and other signal types are rejected."
+    ),
+    p(
+      "The Signal map is per-save and append-only: an ID is assigned the first time a "
+        .. "signal is named or seen, and never renumbered, so a running program's baked "
+        .. "IDs stay valid for the life of the save. Because those IDs are baked in, an "
+        .. "assembled program is not portable between saves — share the assembly source, "
+        .. "which re-resolves its tags on assembly, not the image."
+    ),
+  },
+}
+
 return {
   overview,
   registers,
@@ -465,4 +553,5 @@ return {
   calling_convention,
   memory_model,
   csrs_traps,
+  circuit_io,
 }
