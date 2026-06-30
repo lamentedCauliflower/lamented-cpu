@@ -460,7 +460,7 @@ local csrs_traps = {
 -- (the MMIO map, doorbell offsets, CAP, STATUS bits) and lib/signalmap.lua.
 local IO_EXAMPLE = [[
 # Read both input wires, echo the first signal back at double its value.
-  li   s0, 0x10000000   # Circuit-network controller base
+  li   s0, 0x10000000   # controller base: STATUS / SAMPLE / COMMIT / SNAPSHOT
   li   t0, 3
   sw   t0, 0x004(s0)    # SAMPLE both colours (red | green)
   lw   t1, 0x100(s0)    # t1 = number of signals sampled
@@ -468,10 +468,11 @@ local IO_EXAMPLE = [[
   lw   t2, 0x104(s0)    # id    of the first sampled signal
   lw   t3, 0x108(s0)    # value of the first sampled signal
   add  t3, t3, t3       # double it
+  li   s1, 0x10000800   # STAGING base: too far from s0 for one lw/sw offset
   li   t0, 1
-  sw   t0, 0x800(s0)    # STAGING count = 1
-  sw   t2, 0x804(s0)    # staged id
-  sw   t3, 0x808(s0)    # staged value
+  sw   t0, 0(s1)        # STAGING count = 1
+  sw   t2, 4(s1)        # staged id
+  sw   t3, 8(s1)        # staged value
   sw   zero, 0x008(s0)  # COMMIT -> flush staging onto the output wire
 done:
   ret
