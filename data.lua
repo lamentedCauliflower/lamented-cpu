@@ -17,7 +17,7 @@ entity.minable.result = NAME
 entity.factoriopedia_description = {
   "",
   "Hosts one RISC-V Hart (RV32IM_Zicsr, machine mode). Open the in-game Manual "
-    .. "(Informatron or Booktorio) for the full assembly reference.",
+    .. "(Informatron) for the full assembly reference.",
 }
 
 -- Hidden output combinator: a script-controlled constant-combinator wired to the

@@ -116,7 +116,7 @@ _Avoid_: Control panel, debugger window, fcpu panel.
 
 **Manual**:
 The mod's in-game RISC-V reference — a chaptered education resource for writing assembly
-on the Hart, authored once and rendered through both Booktorio and Informatron. Covers the
+on the Hart, authored once and rendered through Informatron. Covers the
 register file, the instruction set (only the mnemonics the Assembler accepts), the calling
 convention, the memory/execution model, CSRs and traps, and Circuit I/O. Grows by one
 chapter per extension the mod adds. Distinct from the Inspector (the live debugger); the

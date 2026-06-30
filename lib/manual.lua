@@ -1,6 +1,6 @@
 -- The Manual (ADR-0008): one chaptered RISC-V reference authored as a neutral
--- block-list IR and rendered through two third-party doc mods. This file is the IR
--- + the two thin adapters; the chapter content lives in lib/manual/content.lua.
+-- block-list IR and rendered through Informatron. This file is the IR + the
+-- adapter; the chapter content lives in lib/manual/content.lua.
 --
 -- A chapter = { id, title, blocks }. A block is one of five kinds:
 --   heading {level, text} | para {text} | code {text} |
@@ -35,8 +35,8 @@ function M.rows(columns, items)
   return { kind = "rows", columns = columns, items = items }
 end
 
--- a table/rows block -> headers list + cell-string matrix, the one shape both
--- backends render. For `rows` the cells are pulled from each item by column key.
+-- a table/rows block -> headers list + cell-string matrix, the shape the renderer
+-- uses. For `rows` the cells are pulled from each item by column key.
 local function as_grid(b)
   if b.kind == "table" then
     return b.headers, b.rows
@@ -62,49 +62,6 @@ local function chapters()
   return require("lib.manual.content")
 end
 M.chapters = chapters
-
------------------------------------------------------------------- Booktorio adapter
--- One Thread (the Manual book); each chapter is one Topic. Booktorio's TopicTable
--- `table` field is a plain list-of-rows, header row first. No code element exists,
--- so code renders as plain text. ponytail: monospace lands if/when a font is
--- registered in data; until then code is readable but not aligned.
-local function booktorio_topic(ch)
-  local elems = {}
-  for _, b in ipairs(ch.blocks) do
-    if b.kind == "heading" then
-      elems[#elems + 1] = b.level == 1 and { type = "title", title = b.text }
-        or { type = "subtitle", subtitle = b.text }
-    elseif b.kind == "para" or b.kind == "code" then
-      elems[#elems + 1] = { type = "text", text = b.text }
-    else
-      local headers, rows = as_grid(b)
-      local grid = { headers }
-      for _, r in ipairs(rows) do
-        grid[#grid + 1] = r
-      end
-      elems[#elems + 1] = { type = "table", table = grid }
-    end
-  end
-  return { name = ch.title, topic = elems }
-end
-
--- Pure: the full add_thread payload. Tested directly; register_booktorio wraps it.
-function M.booktorio_thread(chs)
-  local topics = {}
-  for _, ch in ipairs(chs or chapters()) do
-    topics[#topics + 1] = booktorio_topic(ch)
-  end
-  return { name = "RISC-V Combinator Manual", mod = "lamented-cpu", topics = topics }
-end
-
--- Call from on_init / on_configuration_changed (remote.call needs runtime). No-op
--- when Booktorio is absent (remote.interfaces guard, ADR-0008).
-function M.register_booktorio()
-  local bk = remote.interfaces["Booktorio"]
-  if bk and bk.add_thread then
-    remote.call("Booktorio", "add_thread", M.booktorio_thread())
-  end
-end
 
 ----------------------------------------------------------------- Informatron adapter
 local IF = "lamented-cpu" -- interface name == root page_name (the Overview chapter)
@@ -202,18 +159,13 @@ function M.register_informatron()
 end
 
 ------------------------------------------------------------------- open (Inspector)
--- The Inspector's Manual button (#29). Whether the Manual is reachable at all: true
--- when either doc mod is installed. Drives the button's visibility -- hidden only
--- when neither backend is present.
+-- The Inspector's Manual button (#29): present only when Informatron is installed.
 function M.available()
-  return remote.interfaces["informatron"] ~= nil or remote.interfaces["Booktorio"] ~= nil
+  return remote.interfaces["informatron"] ~= nil
 end
 
--- Open the Manual for a player, preferring Informatron. Returns false when the only
--- backend is Booktorio: it registers content but exposes no programmatic opener
--- (verified against its API), so a Booktorio-only player opens it from Booktorio's
--- own book and the caller tells them so. Guards on remote.interfaces throughout.
--- ponytail: add a Booktorio branch here the day Booktorio ships an open remote.
+-- Open the Manual for a player. Informatron is the only backend with an open remote;
+-- guarded so a missing or older Informatron never errors.
 function M.open(player)
   local inf = remote.interfaces["informatron"]
   if inf and inf.informatron_open_to_page then
@@ -222,9 +174,7 @@ function M.open(player)
       interface = IF,
       page_name = IF, -- the root page (Overview)
     })
-    return true
   end
-  return false
 end
 
 return M

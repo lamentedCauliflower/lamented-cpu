@@ -1,6 +1,6 @@
 -- Manual content (ADR-0008): the chapter list, authored inline. Each entry is a
--- chapter { id, title, blocks }; the first is the Overview (the Informatron root /
--- the Booktorio book's first topic). Later issues append chapters here.
+-- chapter { id, title, blocks }; the first is the Overview (the Informatron root
+-- page). Later issues append chapters here.
 --
 -- Everything documented is the HONEST SUBSET: only what the Assembler/Hart actually
 -- accept, derived from lib/asm.lua and lib/hart.lua, not the ISA name.

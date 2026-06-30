@@ -11,7 +11,6 @@ local Manual = require("lib.manual")
 
 -- The Manual (ADR-0008): expose the Informatron client interface now, at load time
 -- (remote.add_interface is load-only). No-op if Informatron is not installed.
--- Booktorio is fed at runtime in on_init / on_configuration_changed below.
 Manual.register_informatron()
 
 local NAME = "riscv-combinator"
@@ -64,12 +63,10 @@ end
 
 script.on_init(function()
   ensure_tables()
-  Manual.register_booktorio()
 end)
 
 script.on_configuration_changed(function()
   ensure_tables()
-  Manual.register_booktorio()
 end)
 
 script.on_load(function()
@@ -443,12 +440,11 @@ script.on_event(defines.events.on_gui_click, function(event)
   if not (el and el.valid) then
     return
   end
-  -- Manual button (#29): open the in-game Manual, preferring Informatron. With only
-  -- Booktorio installed (no open remote) point the player at Booktorio's own book.
+  -- Manual button (#29): open the in-game Manual (Informatron).
   if el.name == "riscv_manual" then
     local player = game.get_player(event.player_index)
-    if player and not Manual.open(player) then
-      player.print("The RISC-V Manual is available in Booktorio — open it from Booktorio's book.")
+    if player then
+      Manual.open(player)
     end
     return
   end
