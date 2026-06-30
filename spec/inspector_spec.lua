@@ -74,6 +74,7 @@ describe("Inspector transport", function()
     Inspector.stop(st)
     assert.are.equal("stopped", st.mode)
     assert.is_true(st.dirty)
+    assert.is_nil(st.hart) -- dropped, so the views blank to "(not assembled)"
     Inspector.run(st)
     assert.are.equal("running", st.mode)
     assert.are_not.equal(h, st.hart) -- Stop forced a fresh assemble, not a resume

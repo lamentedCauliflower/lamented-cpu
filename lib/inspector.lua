@@ -92,11 +92,12 @@ function M.pause(st)
   end
 end
 
--- Stop: leave the run and return to the idle/stopped state. Marks the Hart stale so
--- the next Run reassembles from source -- Stop is a full reset of execution, not a
--- resumable pause. The displayed Hart values stay until the next Run.
+-- Stop: leave the run and return to the idle/stopped state. Drops the Hart entirely
+-- so the views blank back to "(not assembled)"; the next Run reassembles from source.
+-- A full reset of execution, not a resumable pause.
 function M.stop(st)
   st.mode, st.status, st.dirty = "stopped", "idle", true
+  st.hart, st.lines = nil, nil
 end
 
 -- editing is only allowed when not running (the editor is read-only while running);
