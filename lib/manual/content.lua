@@ -544,6 +544,136 @@ local circuit_io = {
   },
 }
 
+-- Assembler Reference (#28). The directive/operator/label surface the Assembler
+-- accepts, from lib/asm.lua. Honest subset: what is a no-op and what is rejected.
+local assembler_reference = {
+  id = "assembler-reference",
+  title = "Assembler Reference",
+  blocks = {
+    h1("Assembler Reference"),
+    p(
+      "The Assembler turns your text into a program image in two passes. It is gas-like "
+        .. "but small: this is the whole accepted surface. A line is split on ; into "
+        .. "statements; # begins a comment to end of line; a statement is a label, a "
+        .. "directive, an instruction, or a macro call."
+    ),
+    h2("Labels"),
+    p(
+      "A named label is foo: and marks the current address; use its name anywhere an "
+        .. "expression is expected. A numeric label like 1: is local and reusable — refer "
+        .. "to it as 1f for the next one forward or 1b for the previous one backward, which "
+        .. "is how loops and short branches avoid inventing names."
+    ),
+    h2("Expressions"),
+    p(
+      "Immediates and addresses are constant expressions over unsigned 32-bit arithmetic "
+        .. "(it wraps). Operands are decimal, 0x hex, a character constant like 'A', a "
+        .. "label, or a combination. Operators, highest precedence first:"
+    ),
+    tbl({ "Operators", "Meaning" }, {
+      { "( )", "grouping" },
+      { "- ~ + (unary)", "negate, bitwise NOT, identity" },
+      { "* / %", "multiply, divide, remainder" },
+      { "+ -", "add, subtract" },
+      { "<< >>", "shift left, shift right (logical)" },
+      { "&", "bitwise AND" },
+      { "^", "bitwise XOR" },
+      { "|", "bitwise OR" },
+    }),
+    h2("Directives"),
+    tbl({ "Directive", "Effect" }, {
+      { ".align n / .p2align n", "advance to a 2^n boundary (pads code gaps with nop)" },
+      { ".byte / .half / .word v, …", "emit 1 / 2 / 4-byte little-endian values" },
+      { ".dword v, …", "emit 8 bytes (only the low 32 bits are non-zero)" },
+      { ".fill rep, size, val", "emit rep copies of a size-byte value" },
+      { ".zero n / .skip n", "emit n zero bytes" },
+      { ".weak sym", "declare sym weak; an undefined weak symbol evaluates to 0" },
+      { ".macro / .endm", "define a macro; call it by name" },
+      { ".rept n / .endr", "repeat the enclosed block n times" },
+      { ".globl, .section, .data, .text, …", "accepted but ignored (one flat section)" },
+    }),
+    p(
+      "The ignored directives include .global, .pushsection, .popsection, .size, .type, "
+        .. ".string, .file and .option — they parse without error but emit nothing, so "
+        .. ".string does not place any bytes. Use .byte/.word for data."
+    ),
+    h2("Signal tags"),
+    p(
+      "A rich-text signal tag — [item=…], [fluid=…], [virtual-signal=…] — resolves to its "
+        .. "integer Signal ID and can be used wherever a number can (see Circuit I/O)."
+    ),
+    h2("What is rejected"),
+    p(
+      "An unknown instruction, directive, register or CSR is an error, as is a quality "
+        .. "clause on a signal tag ([item=iron-plate,quality=uncommon]) or any signal type "
+        .. "other than item, fluid and virtual-signal. The Assembler refuses rather than "
+        .. "guess, so a typo fails loudly instead of mis-assembling."
+    ),
+  },
+}
+
+-- Examples (#28): worked programs, each assembled by spec/manual_examples_spec.lua.
+local TRAP_EXAMPLE = [[
+# Install a trap handler, trigger it with ecall, then return.
+_start:
+  la   t0, handler
+  csrw mtvec, t0        # point traps at our handler
+  ecall                 # machine ecall -> mcause = 11 -> jump to mtvec
+  j    done
+handler:
+  csrr t1, mcause       # why did we trap? (11 = ecall)
+  csrr t2, mepc         # the faulting pc
+  addi t2, t2, 4        # step past the ecall so we don't re-trap
+  csrw mepc, t2
+  mret                  # return to mepc
+done:
+  ret
+]]
+
+local examples = {
+  id = "examples",
+  title = "Examples",
+  blocks = {
+    h1("Examples"),
+    p("Worked programs. Each one assembles as written; paste any into the Inspector and run it."),
+    h2("Sum a range"),
+    p("The default program: add 1 through 10, leaving 55 in a0."),
+    code(SUM_EXAMPLE),
+    h2("A function with a stack frame"),
+    p("Prologue/epilogue discipline: save ra and a callee-saved register, call, restore, return."),
+    code(FRAME_EXAMPLE),
+    h2("Read, compute, commit"),
+    p("Sample the input wires, transform a signal, and commit it to the output."),
+    code(IO_EXAMPLE),
+    h2("A trap handler"),
+    p("Point mtvec at a handler, take an ecall, inspect mcause/mepc, and mret back."),
+    code(TRAP_EXAMPLE),
+  },
+}
+
+-- Extensions (#28): append-only placeholder establishing the one-chapter-per-
+-- extension pattern. Nothing here is implemented yet.
+local extensions = {
+  id = "extensions",
+  title = "Extensions",
+  blocks = {
+    h1("Extensions"),
+    p(
+      "The Manual grows by one chapter per extension the Hart gains. The base is "
+        .. "RV32IM_Zicsr in machine mode, and every chapter before this one documents all "
+        .. "of it. When an extension lands it appears here as its own chapter, leaving the "
+        .. "existing chapters untouched. Nothing below is implemented yet:"
+    ),
+    tbl({ "Extension", "Status" }, {
+      { "A — atomics", "Not implemented" },
+      { "F / D — floating point", "Not implemented" },
+      { "C — compressed encoding", "Not implemented" },
+      { "Supervisor (S) mode", "Not implemented" },
+      { "User (U) mode", "Not implemented" },
+    }),
+  },
+}
+
 return {
   overview,
   registers,
@@ -554,4 +684,7 @@ return {
   memory_model,
   csrs_traps,
   circuit_io,
+  assembler_reference,
+  examples,
+  extensions,
 }
