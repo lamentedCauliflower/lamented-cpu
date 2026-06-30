@@ -92,6 +92,13 @@ function M.pause(st)
   end
 end
 
+-- Stop: leave the run and return to the idle/stopped state. Marks the Hart stale so
+-- the next Run reassembles from source -- Stop is a full reset of execution, not a
+-- resumable pause. The displayed Hart values stay until the next Run.
+function M.stop(st)
+  st.mode, st.status, st.dirty = "stopped", "idle", true
+end
+
 -- editing is only allowed when not running (the editor is read-only while running);
 -- it stales the loaded Hart so the next Run/Step reassembles.
 function M.edit(st, text)

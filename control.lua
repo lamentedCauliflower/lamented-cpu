@@ -298,6 +298,12 @@ local function fill_memory(pane, cpu)
   end
 end
 
+-- The Pause button doubles as Stop: while paused, pressing it resets to stopped
+-- (the next Run reassembles) instead of pausing an already-paused Hart.
+local function pause_caption(cpu)
+  return cpu.mode == "paused" and "Stop" or "Pause"
+end
+
 local function open_gui(player, unit, cpu)
   if player.gui.screen[GUI] then
     player.gui.screen[GUI].destroy()
@@ -336,7 +342,7 @@ local function open_gui(player, unit, cpu)
   center.style.padding = 8
   local transport = center.add({ type = "flow", name = "transport", direction = "horizontal" })
   transport.add({ type = "button", name = "riscv_run", caption = "Run" })
-  transport.add({ type = "button", name = "riscv_pause", caption = "Pause" })
+  transport.add({ type = "button", name = "riscv_pause", caption = pause_caption(cpu) })
   transport.add({ type = "button", name = "riscv_step", caption = "Step" })
   transport.add({
     type = "switch",
@@ -408,6 +414,7 @@ local function refresh(unit)
         fill_code(c.codepane, cpu)
         c.status.caption = cpu.status
         c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
+        c.transport.riscv_pause.caption = pause_caption(cpu)
         fill_registers(frame.body.left.regs, cpu)
         fill_memory(frame.body.right.mem, cpu)
       end
@@ -468,7 +475,11 @@ script.on_event(defines.events.on_gui_click, function(event)
     end
     Inspector.step(cpu, resolver())
   elseif el.name == "riscv_pause" then
-    Inspector.pause(cpu)
+    if cpu.mode == "paused" then
+      Inspector.stop(cpu) -- the paused Pause button acts as Stop (reset)
+    else
+      Inspector.pause(cpu)
+    end
   elseif el.name == "riscv_memup" then
     cpu.mem_base = math.max(0, (cpu.mem_base or 0x80000000) - MEM_ROWS * 4)
     cpu.prev_mem = nil

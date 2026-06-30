@@ -65,6 +65,20 @@ describe("Inspector transport", function()
     assert.are.equal(h, st.hart) -- same instance: resumed, not rebuilt
   end)
 
+  it("Stop from paused returns to stopped and forces a reassemble", function()
+    local st = Inspector.new(COUNT)
+    Inspector.enable(st, true)
+    Inspector.run(st)
+    local h = st.hart
+    Inspector.pause(st)
+    Inspector.stop(st)
+    assert.are.equal("stopped", st.mode)
+    assert.is_true(st.dirty)
+    Inspector.run(st)
+    assert.are.equal("running", st.mode)
+    assert.are_not.equal(h, st.hart) -- Stop forced a fresh assemble, not a resume
+  end)
+
   it("editing stales the Hart so the next Run reassembles", function()
     local st = Inspector.new(COUNT)
     Inspector.enable(st, true)
