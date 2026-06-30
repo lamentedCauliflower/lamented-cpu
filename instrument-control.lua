@@ -8,8 +8,6 @@ local Hart = require("lib.hart")
 local Mem = require("lib.mem")
 local io = require("lib.iocontroller")
 local SignalMap = require("lib.signalmap")
-local Inspector = require("lib.inspector")
-local iobridge = require("lib.iobridge")
 local content = require("lib.manual.content")
 
 local function fail(msg)
@@ -122,6 +120,7 @@ tohost: .dword 0
 local RED_IN = defines.wire_connector_id.combinator_input_red
 local RED_OUT = defines.wire_connector_id.combinator_output_red
 local CC_RED = defines.wire_connector_id.circuit_red
+local DEBUG = "lamented-cpu-debug" -- control.lua's automation remote
 
 -- the Manual's read-compute-commit example (3rd code block of the Examples chapter).
 local function io_example_src()
@@ -148,98 +147,67 @@ local function set_cc(entity, name, count)
   }
 end
 
--- A halting sum program placed on a real combinator (no wires) -- proves on_built
--- builds a Hart that runs in-world.
-local function run_halt_test(surface)
-  local pos = surface.find_non_colliding_position("riscv-combinator", { 0, 0 }, 64, 1) or { 0, 0 }
-  local before = surface.count_entities_filtered({ name = "riscv-combinator-output" })
+-- place a RISC-V Combinator and fire control.lua's on_built (which registers its Hart).
+local function place(surface, center)
+  local pos = surface.find_non_colliding_position("riscv-combinator", center, 64, 1) or center
   local e = surface.create_entity({ name = "riscv-combinator", position = pos, force = "player" })
   check(e and e.valid, "could not place a RISC-V Combinator")
-  script.raise_script_built({ entity = e }) -- fire control.lua's on_built
-  check(
-    surface.count_entities_filtered({ name = "riscv-combinator-output" }) > before,
-    "placing the combinator did not trigger on_built (no output combinator)"
-  )
-  local cpu = Inspector.new(HALT_SRC)
-  Inspector.run(cpu, function()
-    return 1
-  end)
-  for _ = 1, 2000 do
-    Inspector.tick(cpu)
-    if cpu.mode ~= "running" then
-      break
-    end
-  end
-  check(cpu.mode == "halted", "halt program did not halt: " .. tostring(cpu.mode))
-  check(cpu.hart.x[10] == 55, "in-world a0 = " .. tostring(cpu.hart.x[10]) .. ", want 55")
+  script.raise_script_built({ entity = e })
+  return e
 end
 
--- Black-box Circuit I/O: feed [item=iron-plate]=21 on the input wire, run the Manual's
--- read-compute-commit example through the REAL bridge against a real combinator, and
--- read the doubled signal back off the output wire. Spans ticks because the circuit
--- network needs a tick to propagate a placement/commit.
-local iostate
-
-local function io_setup(surface)
-  local pos = surface.find_non_colliding_position("riscv-combinator", { 20, 0 }, 64, 1) or { 20, 0 }
-  local e = surface.create_entity({ name = "riscv-combinator", position = pos, force = "player" })
-  check(e and e.valid, "io: could not place combinator")
-  script.raise_script_built({ entity = e })
-  local outproxy =
-    surface.find_entities_filtered({ name = "riscv-combinator-output", position = e.position })[1]
-  check(outproxy and outproxy.valid, "io: on_built did not create the output combinator")
-  local fpos =
-    surface.find_non_colliding_position("constant-combinator", { pos.x + 2, pos.y }, 64, 1)
+-- a constant combinator feeding `count` of `name` into the combinator's red input.
+local function wire_feeder(surface, e, name, count)
+  local at = { e.position.x + 2, e.position.y }
+  local fpos = surface.find_non_colliding_position("constant-combinator", at, 64, 1)
   local feeder =
     surface.create_entity({ name = "constant-combinator", position = fpos, force = "player" })
   check(feeder and feeder.valid, "io: could not place feeder combinator")
-  set_cc(feeder, "iron-plate", 21)
-  -- wire feeder -> combinator input (same call shape as control.lua's make_outproxy).
+  set_cc(feeder, name, count)
   feeder.get_wire_connector(CC_RED, true).connect_to(e.get_wire_connector(RED_IN, true))
-  iostate = { e = e, outproxy = outproxy, sm = SignalMap.new() }
 end
 
-local function io_run()
-  local st = iostate
-  local h = build(io_example_src())
-  h.io_base = io.BASE
-  drive(h, 200, function(hh)
-    local d = hh.doorbell
-    if not d then
-      return
-    end
-    hh.doorbell = nil
-    if d.off == io.SAMPLE then
-      io.sample(hh.mem, iobridge.read_input(st.e, st.sm), d.value)
-    elseif d.off == io.COMMIT then
-      iobridge.write_output(st.outproxy, io.commit(hh.mem, st.sm))
-    end
-  end)
+local function out_signal(e, name)
+  local cn = e.get_circuit_network(RED_OUT)
+  return cn and cn.get_signal({ type = "item", name = name, quality = "normal" })
 end
 
-local function io_assert()
-  local cn = iostate.e.get_circuit_network(RED_OUT)
-  local got = cn and cn.get_signal({ type = "item", name = "iron-plate", quality = "normal" })
-  check(
-    got == 42,
-    "I/O black-box: output wire iron-plate = " .. tostring(got) .. ", want 42 (21 doubled)"
-  )
-end
-
--- on_nth_tick (not on_init/on_tick, which would clobber control.lua's handlers): a
--- tick-gated state machine so placement and commit can propagate on the wires.
-local t0
+-- Black box: the test only places entities, wires them, asks the mod (via its
+-- automation remote) to load+run a program, and observes the circuit wires / register
+-- file. ALL execution -- assemble, step, Sample/Commit, the live wire reads and writes
+-- -- happens inside the real mod (control.lua's on_tick + service_io), never
+-- reimplemented here. Two combinators run at once:
+--   * halt: load on a bare combinator, watch `peek` until it halts with a0 = 55.
+--   * circuit I/O: feed iron-plate=21 on the input wire, run the read-compute-commit
+--     example, and watch iron-plate=42 appear on the output wire.
+local t0, e_halt, e_io, halt_ok, io_ok
 script.on_nth_tick(1, function(ev)
   if not t0 then
     local surface = game.surfaces[1]
-    run_halt_test(surface)
-    io_setup(surface)
+    e_halt = place(surface, { 0, 0 })
+    check(remote.call(DEBUG, "load", e_halt.unit_number, HALT_SRC), "halt: load failed")
+    e_io = place(surface, { 20, 0 })
+    wire_feeder(surface, e_io, "iron-plate", 21)
+    check(remote.call(DEBUG, "load", e_io.unit_number, io_example_src()), "io: load failed")
     t0 = ev.tick
-  elseif ev.tick == t0 + 2 then
-    io_run() -- input network is live: SAMPLE reads it, COMMIT writes the outproxy
-  elseif ev.tick >= t0 + 4 then
-    io_assert() -- output network has propagated the committed signal
+    return
+  end
+
+  if not halt_ok then
+    local p = remote.call(DEBUG, "peek", e_halt.unit_number)
+    if p and p.mode == "halted" then
+      check(p.x[10] == 55, "halt: a0 = " .. tostring(p.x[10]) .. ", want 55")
+      halt_ok = true
+    end
+  end
+  if not io_ok and out_signal(e_io, "iron-plate") == 42 then
+    io_ok = true -- the doubled signal reached the output wire
+  end
+
+  if halt_ok and io_ok then
     script.on_nth_tick(1, nil)
-    log("[in-game test] PASSED: example programs + in-world combinator + circuit I/O")
+    log("[in-game test] PASSED: example programs + black-box halt + black-box circuit I/O")
+  elseif ev.tick > t0 + 80 then
+    check(false, "in-game timeout: halt_ok=" .. tostring(halt_ok) .. " io_ok=" .. tostring(io_ok))
   end
 end)

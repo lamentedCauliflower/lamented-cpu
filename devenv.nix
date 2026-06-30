@@ -125,7 +125,7 @@ INI
         # mod in the engine's own Lua VM and the live in-world entity path, erroring
         # (non-zero exit, no PASSED line) on any failure. Gate on the PASS sentinel.
         "$bin" --config .factorio/config.ini --mod-directory .factorio/mods \
-               --benchmark "$save" --benchmark-ticks 20 --instrument-mod lamented-cpu \
+               --benchmark "$save" --benchmark-ticks 100 --instrument-mod lamented-cpu \
           | tee .factorio/ingame.log
         grep -qF "PASSED: example programs" .factorio/ingame.log \
           || { echo "in-game tests FAILED (see .factorio/ingame.log)"; exit 1; }

@@ -193,6 +193,32 @@ local function resolver()
   end
 end
 
+-- Automation/test seam: drive a combinator's Hart by unit_number without the GUI, so
+-- an external caller (the in-game black-box test, or any automation mod) can load a
+-- program and run it, then observe the result purely on the circuit wires. Only acts
+-- on a combinator this mod owns; a no-op otherwise.
+remote.add_interface("lamented-cpu-debug", {
+  -- load `source` into the combinator at `unit` and start running it; returns true if
+  -- it assembled and entered the running state.
+  load = function(unit, source)
+    local cpu = storage.cpus and storage.cpus[unit]
+    if not cpu then
+      return false
+    end
+    cpu.source, cpu.dirty = source, true
+    Inspector.run(cpu, resolver())
+    return cpu.mode == "running"
+  end,
+  -- inspect the Hart at `unit`: transport mode/status and the register file (x0..x31).
+  peek = function(unit)
+    local cpu = storage.cpus and storage.cpus[unit]
+    if not cpu then
+      return nil
+    end
+    return { mode = cpu.mode, status = cpu.status, x = cpu.hart and cpu.hart.x }
+  end,
+})
+
 -- fcpu-style gutter: ONE label per source line in a vertical flow beside the text-box
 -- (a single multi-line label collapses -- Factorio labels are single-line). The
 -- text-box is sized to fit every line so it never scrolls on its own; gutter + box
