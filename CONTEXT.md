@@ -111,3 +111,14 @@ view of a single Hart — the editable assembly source with the currently execut
 instruction's source line marked, the register file, and a memory browser — driven by
 Run / Pause / Step transport over a master On/Off enable.
 _Avoid_: Control panel, debugger window, fcpu panel.
+
+## Documentation
+
+**Manual**:
+The mod's in-game RISC-V reference — a chaptered education resource for writing assembly
+on the Hart, authored once and rendered through both Booktorio and Informatron. Covers the
+register file, the instruction set (only the mnemonics the Assembler accepts), the calling
+convention, the memory/execution model, CSRs and traps, and Circuit I/O. Grows by one
+chapter per extension the mod adds. Distinct from the Inspector (the live debugger); the
+Manual is static reference, not a view of any one Hart.
+_Avoid_: Docs, help, wiki, guide, tooltip.

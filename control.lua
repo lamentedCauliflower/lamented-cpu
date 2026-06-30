@@ -7,6 +7,12 @@ local Mem = require("lib.mem")
 local iocontroller = require("lib.iocontroller")
 local SignalMap = require("lib.signalmap")
 local Inspector = require("lib.inspector")
+local Manual = require("lib.manual")
+
+-- The Manual (ADR-0008): expose the Informatron client interface now, at load time
+-- (remote.add_interface is load-only). No-op if Informatron is not installed.
+-- Booktorio is fed at runtime in on_init / on_configuration_changed below.
+Manual.register_informatron()
 
 local NAME = "riscv-combinator"
 local OUT = NAME .. "-output"
@@ -58,10 +64,12 @@ end
 
 script.on_init(function()
   ensure_tables()
+  Manual.register_booktorio()
 end)
 
 script.on_configuration_changed(function()
   ensure_tables()
+  Manual.register_booktorio()
 end)
 
 script.on_load(function()

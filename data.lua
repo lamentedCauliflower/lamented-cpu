@@ -12,6 +12,13 @@ local OUT = NAME .. "-output"
 local entity = table.deepcopy(data.raw["decider-combinator"]["decider-combinator"])
 entity.name = NAME
 entity.minable.result = NAME
+-- Point Factoriopedia at the in-game Manual (ADR-0008), the real reference; this
+-- blurb is only the pointer, since Factoriopedia can't hold chaptered prose.
+entity.factoriopedia_description = {
+  "",
+  "Hosts one RISC-V Hart (RV32IM_Zicsr, machine mode). Open the in-game Manual "
+    .. "(Informatron or Booktorio) for the full assembly reference.",
+}
 
 -- Hidden output combinator: a script-controlled constant-combinator wired to the
 -- visible entity's output side. Commit rewrites its signals; it alone drives the
