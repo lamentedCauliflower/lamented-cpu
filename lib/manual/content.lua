@@ -179,4 +179,162 @@ local register_types = {
   },
 }
 
-return { overview, registers, register_types }
+-- Instruction set (#25). Each row carries a concrete `ex` one-liner that the
+-- coverage spec assembles, so the Manual can never list a mnemonic the Assembler
+-- rejects (ADR-0008). `operands` is the display syntax; `ex` is real and runnable.
+local INSN_COLS = {
+  { key = "mnemonic", header = "Mnemonic" },
+  { key = "operands", header = "Operands" },
+  { key = "semantics", header = "Semantics" },
+}
+local function r(m, o, s, ex)
+  return { mnemonic = m, operands = o, semantics = s, kind = "real", ex = ex }
+end
+local function ps(m, o, s, ex)
+  return { mnemonic = m, operands = o, semantics = s, kind = "pseudo", ex = ex }
+end
+
+local ARITH = {
+  r("add", "rd, rs1, rs2", "rd = rs1 + rs2", "add a0, a1, a2"),
+  r("sub", "rd, rs1, rs2", "rd = rs1 - rs2", "sub a0, a1, a2"),
+  r("and", "rd, rs1, rs2", "rd = rs1 & rs2", "and a0, a1, a2"),
+  r("or", "rd, rs1, rs2", "rd = rs1 | rs2", "or a0, a1, a2"),
+  r("xor", "rd, rs1, rs2", "rd = rs1 ^ rs2", "xor a0, a1, a2"),
+  r("sll", "rd, rs1, rs2", "rd = rs1 << (rs2 & 31)", "sll a0, a1, a2"),
+  r("srl", "rd, rs1, rs2", "rd = rs1 >> (rs2 & 31), logical", "srl a0, a1, a2"),
+  r("sra", "rd, rs1, rs2", "rd = rs1 >> (rs2 & 31), arithmetic", "sra a0, a1, a2"),
+  r("slt", "rd, rs1, rs2", "rd = (rs1 < rs2) ? 1 : 0, signed", "slt a0, a1, a2"),
+  r("sltu", "rd, rs1, rs2", "rd = (rs1 < rs2) ? 1 : 0, unsigned", "sltu a0, a1, a2"),
+  r("addi", "rd, rs1, imm", "rd = rs1 + imm", "addi a0, a1, 1"),
+  r("andi", "rd, rs1, imm", "rd = rs1 & imm", "andi a0, a1, 1"),
+  r("ori", "rd, rs1, imm", "rd = rs1 | imm", "ori a0, a1, 1"),
+  r("xori", "rd, rs1, imm", "rd = rs1 ^ imm", "xori a0, a1, 1"),
+  r("slti", "rd, rs1, imm", "rd = (rs1 < imm) ? 1 : 0, signed", "slti a0, a1, 1"),
+  r("sltiu", "rd, rs1, imm", "rd = (rs1 < imm) ? 1 : 0, unsigned", "sltiu a0, a1, 1"),
+  r("slli", "rd, rs1, shamt", "rd = rs1 << shamt", "slli a0, a1, 1"),
+  r("srli", "rd, rs1, shamt", "rd = rs1 >> shamt, logical", "srli a0, a1, 1"),
+  r("srai", "rd, rs1, shamt", "rd = rs1 >> shamt, arithmetic", "srai a0, a1, 1"),
+}
+local MULDIV = {
+  r("mul", "rd, rs1, rs2", "rd = low 32 bits of rs1 * rs2", "mul a0, a1, a2"),
+  r("mulh", "rd, rs1, rs2", "rd = high 32 bits, signed * signed", "mulh a0, a1, a2"),
+  r("mulhu", "rd, rs1, rs2", "rd = high 32 bits, unsigned * unsigned", "mulhu a0, a1, a2"),
+  r("mulhsu", "rd, rs1, rs2", "rd = high 32 bits, signed * unsigned", "mulhsu a0, a1, a2"),
+  r("div", "rd, rs1, rs2", "rd = rs1 / rs2, signed (÷0 = -1)", "div a0, a1, a2"),
+  r("divu", "rd, rs1, rs2", "rd = rs1 / rs2, unsigned (÷0 = all-ones)", "divu a0, a1, a2"),
+  r("rem", "rd, rs1, rs2", "rd = rs1 % rs2, signed (sign of rs1)", "rem a0, a1, a2"),
+  r("remu", "rd, rs1, rs2", "rd = rs1 % rs2, unsigned", "remu a0, a1, a2"),
+}
+local MEMOPS = {
+  r("lw", "rd, off(rs1)", "rd = mem[rs1+off], 32-bit", "lw a0, 0(sp)"),
+  r("lh", "rd, off(rs1)", "rd = mem[rs1+off], 16-bit sign-extended", "lh a0, 0(sp)"),
+  r("lhu", "rd, off(rs1)", "rd = mem[rs1+off], 16-bit zero-extended", "lhu a0, 0(sp)"),
+  r("lb", "rd, off(rs1)", "rd = mem[rs1+off], 8-bit sign-extended", "lb a0, 0(sp)"),
+  r("lbu", "rd, off(rs1)", "rd = mem[rs1+off], 8-bit zero-extended", "lbu a0, 0(sp)"),
+  r("sw", "rs2, off(rs1)", "mem[rs1+off] = rs2, 32-bit", "sw a0, 0(sp)"),
+  r("sh", "rs2, off(rs1)", "mem[rs1+off] = rs2, low 16 bits", "sh a0, 0(sp)"),
+  r("sb", "rs2, off(rs1)", "mem[rs1+off] = rs2, low 8 bits", "sb a0, 0(sp)"),
+}
+local CONTROL = {
+  r("beq", "rs1, rs2, label", "branch if rs1 == rs2", "beq a0, a1, 1f"),
+  r("bne", "rs1, rs2, label", "branch if rs1 != rs2", "bne a0, a1, 1f"),
+  r("blt", "rs1, rs2, label", "branch if rs1 < rs2, signed", "blt a0, a1, 1f"),
+  r("bge", "rs1, rs2, label", "branch if rs1 >= rs2, signed", "bge a0, a1, 1f"),
+  r("bltu", "rs1, rs2, label", "branch if rs1 < rs2, unsigned", "bltu a0, a1, 1f"),
+  r("bgeu", "rs1, rs2, label", "branch if rs1 >= rs2, unsigned", "bgeu a0, a1, 1f"),
+  r("jal", "rd, label", "rd = pc+4; jump to label", "jal ra, 1f"),
+  r("jalr", "rd, off(rs1)", "rd = pc+4; jump to rs1+off", "jalr ra, 0(a1)"),
+}
+local UPPER = {
+  r("lui", "rd, imm20", "rd = imm20 << 12", "lui a0, 1"),
+  r("auipc", "rd, imm20", "rd = pc + (imm20 << 12)", "auipc a0, 1"),
+}
+local SYSTEM = {
+  r("csrrw", "rd, csr, rs1", "rd = csr; csr = rs1", "csrrw a0, mtvec, a1"),
+  r("csrrs", "rd, csr, rs1", "rd = csr; csr |= rs1", "csrrs a0, mtvec, a1"),
+  r("csrrc", "rd, csr, rs1", "rd = csr; csr &= ~rs1", "csrrc a0, mtvec, a1"),
+  r("csrrwi", "rd, csr, zimm", "rd = csr; csr = zimm", "csrrwi a0, mtvec, 1"),
+  r("csrrsi", "rd, csr, zimm", "rd = csr; csr |= zimm", "csrrsi a0, mtvec, 1"),
+  r("csrrci", "rd, csr, zimm", "rd = csr; csr &= ~zimm", "csrrci a0, mtvec, 1"),
+  r("ecall", "—", "trap to mtvec (machine ecall, mcause=11)", "ecall"),
+  r("ebreak", "—", "breakpoint trap (mcause=3)", "ebreak"),
+  r("mret", "—", "return from trap to mepc", "mret"),
+  r("fence", "—", "memory ordering; a no-op on the single Hart", "fence"),
+  r("fence.i", "—", "instruction-stream fence; a no-op here", "fence.i"),
+  r("wfi", "—", "wait for interrupt; a no-op (no async interrupts)", "wfi"),
+}
+
+local instruction_set = {
+  id = "instructions",
+  title = "Instruction Set",
+  blocks = {
+    h1("Instruction Set"),
+    p(
+      "Every real instruction the Assembler encodes, by category. rd is the "
+        .. "destination, rs1/rs2 the sources; imm is a 12-bit signed immediate, shamt a "
+        .. "5-bit shift amount, zimm a 5-bit unsigned immediate, and csr a CSR name or "
+        .. "number. Anything not listed here is rejected."
+    ),
+    h2("Arithmetic & logical"),
+    rows(INSN_COLS, ARITH),
+    h2("Multiply & divide (M)"),
+    rows(INSN_COLS, MULDIV),
+    h2("Loads & stores"),
+    p("Memory is little-endian; misaligned access is allowed, not trapped."),
+    rows(INSN_COLS, MEMOPS),
+    h2("Control flow"),
+    p("Branch and jump targets are written as labels; the Assembler resolves the offset."),
+    rows(INSN_COLS, CONTROL),
+    h2("Upper immediate & address"),
+    rows(INSN_COLS, UPPER),
+    h2("System & CSR (Zicsr)"),
+    rows(INSN_COLS, SYSTEM),
+  },
+}
+
+-- Pseudo-instructions (#25): the finite set the Assembler expands to real ops.
+local PSEUDO = {
+  ps("li", "rd, imm", "load a 32-bit immediate (addi, or lui+addi)", "li a0, 0x12345"),
+  ps("la", "rd, symbol", "load address, pc-relative (auipc+addi)", "la a0, 0x80000100"),
+  ps("lla", "rd, symbol", "load local address (same as la here)", "lla a0, 0x80000100"),
+  ps("mv", "rd, rs", "rd = rs  (addi rd, rs, 0)", "mv a0, a1"),
+  ps("nop", "—", "do nothing  (addi x0, x0, 0)", "nop"),
+  ps("j", "label", "unconditional jump  (jal x0)", "j 1f"),
+  ps("jr", "rs", "jump to rs  (jalr x0, 0(rs))", "jr a0"),
+  ps("ret", "—", "return  (jalr x0, 0(ra))", "ret"),
+  ps("beqz", "rs, label", "branch if rs == 0", "beqz a0, 1f"),
+  ps("bnez", "rs, label", "branch if rs != 0", "bnez a0, 1f"),
+  ps("ble", "rs1, rs2, label", "branch if rs1 <= rs2, signed", "ble a0, a1, 1f"),
+  ps("bgt", "rs1, rs2, label", "branch if rs1 > rs2, signed", "bgt a0, a1, 1f"),
+  ps("bleu", "rs1, rs2, label", "branch if rs1 <= rs2, unsigned", "bleu a0, a1, 1f"),
+  ps("bgtu", "rs1, rs2, label", "branch if rs1 > rs2, unsigned", "bgtu a0, a1, 1f"),
+  ps("csrr", "rd, csr", "read CSR  (csrrs rd, csr, x0)", "csrr a0, mtvec"),
+  ps("csrw", "csr, rs", "write CSR  (csrrw x0, csr, rs)", "csrw mtvec, a0"),
+  ps("csrwi", "csr, zimm", "write CSR immediate", "csrwi mtvec, 1"),
+  ps("csrs", "csr, rs", "set CSR bits  (csrrs x0, csr, rs)", "csrs mtvec, a0"),
+  ps("csrc", "csr, rs", "clear CSR bits  (csrrc x0, csr, rs)", "csrc mtvec, a0"),
+  ps("csrsi", "csr, zimm", "set CSR bits, immediate", "csrsi mtvec, 1"),
+  ps("csrci", "csr, zimm", "clear CSR bits, immediate", "csrci mtvec, 1"),
+}
+
+local pseudo_instructions = {
+  id = "pseudo-instructions",
+  title = "Pseudo-instructions",
+  blocks = {
+    h1("Pseudo-instructions"),
+    p(
+      "These are conveniences the Assembler expands into the real instructions above. "
+        .. "They assemble to one or two real instructions; the expansion is shown in the "
+        .. "Semantics column. This is the complete accepted set."
+    ),
+    rows(INSN_COLS, PSEUDO),
+  },
+}
+
+return {
+  overview,
+  registers,
+  register_types,
+  instruction_set,
+  pseudo_instructions,
+}
