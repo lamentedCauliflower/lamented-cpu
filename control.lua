@@ -347,6 +347,10 @@ local function open_gui(player, unit, cpu)
     right_label_caption = "On",
     switch_state = cpu.enabled and "right" or "left",
   })
+  -- Manual button (#29): only when a doc-mod backend is installed to open into.
+  if Manual.available() then
+    transport.add({ type = "button", name = "riscv_manual", caption = "Manual" })
+  end
   center.add({ type = "label", caption = "Commands" })
   local codepane = center.add({ type = "scroll-pane", name = "codepane" })
   codepane.style.maximal_height = 360
@@ -437,6 +441,15 @@ end)
 script.on_event(defines.events.on_gui_click, function(event)
   local el = event.element
   if not (el and el.valid) then
+    return
+  end
+  -- Manual button (#29): open the in-game Manual, preferring Informatron. With only
+  -- Booktorio installed (no open remote) point the player at Booktorio's own book.
+  if el.name == "riscv_manual" then
+    local player = game.get_player(event.player_index)
+    if player and not Manual.open(player) then
+      player.print("The RISC-V Manual is available in Booktorio — open it from Booktorio's book.")
+    end
     return
   end
   local unit = storage.viewing[event.player_index]

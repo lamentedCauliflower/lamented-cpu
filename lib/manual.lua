@@ -201,4 +201,30 @@ function M.register_informatron()
   })
 end
 
+------------------------------------------------------------------- open (Inspector)
+-- The Inspector's Manual button (#29). Whether the Manual is reachable at all: true
+-- when either doc mod is installed. Drives the button's visibility -- hidden only
+-- when neither backend is present.
+function M.available()
+  return remote.interfaces["informatron"] ~= nil or remote.interfaces["Booktorio"] ~= nil
+end
+
+-- Open the Manual for a player, preferring Informatron. Returns false when the only
+-- backend is Booktorio: it registers content but exposes no programmatic opener
+-- (verified against its API), so a Booktorio-only player opens it from Booktorio's
+-- own book and the caller tells them so. Guards on remote.interfaces throughout.
+-- ponytail: add a Booktorio branch here the day Booktorio ships an open remote.
+function M.open(player)
+  local inf = remote.interfaces["informatron"]
+  if inf and inf.informatron_open_to_page then
+    remote.call("informatron", "informatron_open_to_page", {
+      player_index = player.index,
+      interface = IF,
+      page_name = IF, -- the root page (Overview)
+    })
+    return true
+  end
+  return false
+end
+
 return M
