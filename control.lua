@@ -609,6 +609,31 @@ script.on_event(defines.events.on_entity_settings_pasted, function(event)
   end
 end)
 
+-- Clone (#24, ADR-0009): the map-editor clone tool, surface.clone_entities, and
+-- super-force clone reproduce a combinator's configuration -- source + master-enable --
+-- on the clone via seed_cpu, which also wires a FRESH hidden output combinator (a clone
+-- carries neither the live storage record nor the old proxy). The clone starts stopped
+-- and reassembles from source on Run; no live execution state is copied. A clone reports
+-- one on_entity_cloned per copied entity, so the hidden output combinator is reported
+-- too -- destroy that stray, since seed_cpu makes exactly one proxy per visible entity.
+script.on_event(defines.events.on_entity_cloned, function(event)
+  local dst = event.destination
+  if not (dst and dst.valid) then
+    return
+  end
+  if dst.name == OUT then
+    dst.destroy() -- stray clone of the hidden output combinator; we recreate our own
+    return
+  end
+  if dst.name ~= NAME then
+    return
+  end
+  ensure_tables()
+  local src = event.source
+  local scpu = src and src.valid and storage.cpus and storage.cpus[src.unit_number]
+  seed_cpu(dst, scpu and { source = scpu.source, enabled = scpu.enabled } or nil)
+end)
+
 --------------------------------------------------------------- one instr per tick
 script.on_event(defines.events.on_tick, function()
   if not storage.cpus then
