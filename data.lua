@@ -1,7 +1,11 @@
--- Data stage: the RISC-V Combinator entity + item + hidden output combinator.
--- ponytail: clone base prototypes so we reuse their graphics, build sounds and
--- circuit-connection points -- the mod ships no binary assets.
-local NAME = "riscv-combinator"
+-- Data stage: the RISC-V Combinator entity + item + hidden output combinator, plus the
+-- recipe and technology that gate it (ADR-0010). Thin adapter: it deep-copies the base
+-- prototypes it reuses (entity graphics, sounds, connection points), then calls the pure
+-- builder (lib/protos) for the branch-dependent recipe / technology / item overrides and
+-- data:extends the lot -- the gating branch follows mods["space-age"] (#33).
+local Protos = require("lib.protos")
+
+local NAME = Protos.NAME
 local OUT = NAME .. "-output"
 
 -- Visible entity: two-sided (separate input/output connectors) so sources wire to
@@ -41,15 +45,11 @@ item.name = NAME
 item.place_result = NAME
 item.order = "c[combinators]-z[" .. NAME .. "]"
 
-local recipe = {
-  type = "recipe",
-  name = NAME,
-  enabled = true,
-  ingredients = {
-    { type = "item", name = "copper-cable", amount = 5 },
-    { type = "item", name = "electronic-circuit", amount = 2 },
-  },
-  results = { { type = "item", name = NAME, amount = 1 } },
-}
+-- Branch-dependent recipe / technology / item overrides from the pure builder. Vanilla
+-- vs Space Age is chosen once here (#33); everything else is engine-free in lib/protos.
+local built = Protos.build({ space_age = mods["space-age"] ~= nil })
+for k, v in pairs(built.item) do
+  item[k] = v -- stack_size, weight (rocket capacity) -- see lib/protos
+end
 
-data:extend({ entity, out, item, recipe })
+data:extend({ entity, out, item, built.recipe, built.technology })
