@@ -57,7 +57,9 @@ gate. `info.json` gains `"(?) space-age"` as an optional dependency for load ord
   ·`error`), and destroys it on removal; updates are event-driven off the existing transitions in
   `inspector.lua` plus the on-tick self-halt check, so there is no per-tick polling. The overlay
   is world-global, unlike the per-player Inspector view state. This adds a "screen" region to the
-  base sprite and five placeholder status glyphs.
+  base sprite and one placeholder status glyph recoloured per state (a pure `overlay_for(mode)` in
+  `lib/overlay` maps the mode to a tint; `halted:pass`/`halted:fail` differ and `error` reuses the
+  fail tint). Real per-state art is debt.
 - CONTEXT.md is untouched — this adds no domain vocabulary; the term "RISC-V Combinator" and the
   prototype id `riscv-combinator` are unchanged. This is an implementation/packaging decision,
   not a language one.

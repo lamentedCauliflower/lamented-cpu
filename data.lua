@@ -4,6 +4,7 @@
 -- builder (lib/protos) for the branch-dependent recipe / technology / item overrides and
 -- data:extends the lot -- the gating branch follows mods["space-age"] (#33).
 local Protos = require("lib.protos")
+local Overlay = require("lib.overlay") -- pure: only the status-sprite name at data stage
 
 local NAME = Protos.NAME
 local OUT = NAME .. "-output"
@@ -116,4 +117,15 @@ for k, v in pairs(built.item) do
   item[k] = v -- see lib/protos
 end
 
-data:extend({ entity, out, item, built.recipe, built.technology })
+-- Status-face glyph (#35): one sprite the control stage draws over the entity face and
+-- recolours per Hart mode (lib/overlay). Flat placeholder disc; per-state art is debt.
+local status_sprite = {
+  type = "sprite",
+  name = Overlay.SPRITE,
+  filename = "__lamented-cpu__/graphics/status/riscv-status.png",
+  width = 32,
+  height = 32,
+  flags = { "gui-icon" },
+}
+
+data:extend({ entity, out, item, built.recipe, built.technology, status_sprite })

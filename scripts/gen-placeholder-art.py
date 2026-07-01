@@ -8,6 +8,7 @@ as debt). Pure stdlib (zlib) -- no Pillow/ImageMagick dependency. Flat solid sha
 Outputs (committed as the mod's shipped placeholders):
   graphics/entity/riscv-combinator-h.png  96x64  north/south body (3 wide x 2 tall)
   graphics/entity/riscv-combinator-v.png  64x96  east/west body  (2 wide x 3 tall)
+  graphics/status/riscv-status.png        32x32  white status disc, tinted per Hart mode
 """
 import os
 import struct
@@ -63,9 +64,22 @@ def body(w, h):
     return px
 
 
+def status_glyph(n):
+    # a filled white disc on transparent; the colour comes from the per-mode tint the
+    # LuaRendering overlay applies at runtime (lib/overlay).
+    px = img(n, n)
+    c, r = (n - 1) / 2.0, n / 2.0 - 1
+    for y in range(n):
+        for x in range(n):
+            if (x - c) ** 2 + (y - c) ** 2 <= r * r:
+                px[y][x] = (255, 255, 255, 255)
+    return px
+
+
 def main():
     write_png(os.path.join(ROOT, "graphics/entity/riscv-combinator-h.png"), body(96, 64))
     write_png(os.path.join(ROOT, "graphics/entity/riscv-combinator-v.png"), body(64, 96))
+    write_png(os.path.join(ROOT, "graphics/status/riscv-status.png"), status_glyph(32))
     print("wrote placeholder art under graphics/")
 
 
