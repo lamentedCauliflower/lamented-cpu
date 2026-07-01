@@ -255,13 +255,15 @@ remote.add_interface("lamented-cpu-debug", {
     Inspector.run(cpu, resolver())
     return cpu.mode == "running"
   end,
-  -- inspect the Hart at `unit`: transport mode/status and the register file (x0..x31).
+  -- inspect the Hart at `unit`: transport mode/status, the loaded source, and the
+  -- register file (x0..x31). `source` lets the blueprint round-trip test confirm a
+  -- rebuilt combinator reassembled the same program without reading the mod's storage.
   peek = function(unit)
     local cpu = storage.cpus and storage.cpus[unit]
     if not cpu then
       return nil
     end
-    return { mode = cpu.mode, status = cpu.status, x = cpu.hart and cpu.hart.x }
+    return { mode = cpu.mode, status = cpu.status, source = cpu.source, x = cpu.hart and cpu.hart.x }
   end,
 })
 

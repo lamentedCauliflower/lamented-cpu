@@ -8,6 +8,7 @@ local Hart = require("lib.hart")
 local Mem = require("lib.mem")
 local io = require("lib.iocontroller")
 local SignalMap = require("lib.signalmap")
+local Config = require("lib.config")
 local content = require("lib.manual.content")
 
 local function fail(msg)
@@ -172,6 +173,61 @@ local function out_signal(e, name)
   return cn and cn.get_signal({ type = "item", name = name, quality = "normal" })
 end
 
+-- a distinct program whose only job is to be recognizable after a blueprint round-trip.
+local BP_SRC = "# blueprint-roundtrip-marker\nli a0, 7\n"
+
+-- Blueprint round-trip (black box, ADR-0009 / #21): a RISC-V Combinator built from a
+-- blueprint must reassemble the SAME source, start stopped, and get a fresh hidden output
+-- combinator. The player-capture handler (on_player_setup_blueprint) cannot fire in a
+-- headless run -- no player, and its mapping is an engine-made lazy value -- so the test
+-- drives the two halves it CAN reach for real, observing only through the mod's remote +
+-- the world:
+--   * the tag write the handler relies on: set_blueprint_entity_tags on a real blueprint
+--     stack, read back off the blueprint entity;
+--   * the build path: a ghost carrying that tag, revived, which fires on_built with
+--     event.tags exactly as a robot/hand build of a blueprinted ghost does.
+local function run_blueprint_check(surface)
+  -- write the config into a real blueprint stack the way the capture handler would, and
+  -- confirm it persists on the blueprint entity (the engine hands this back as event.tags).
+  local inv = game.create_inventory(1)
+  inv[1].set_stack("blueprint")
+  inv[1].set_blueprint_entities({
+    { entity_number = 1, name = "riscv-combinator", position = { 0, 0 } },
+  })
+  inv[1].set_blueprint_entity_tags(1, Config.to_tags({ source = BP_SRC, enabled = true }))
+  local tags = inv[1].get_blueprint_entities()[1].tags
+  inv.destroy()
+  check(tags and tags.source == BP_SRC, "bp: set_blueprint_entity_tags did not persist the config")
+
+  -- build a copy: a ghost carrying those tags, revived, fires on_built with event.tags.
+  local before = surface.count_entities_filtered({ name = "riscv-combinator-output" })
+  local pos = surface.find_non_colliding_position("riscv-combinator", { 40, 0 }, 64, 1)
+  local ghost = surface.create_entity({
+    name = "entity-ghost",
+    inner_name = "riscv-combinator",
+    position = pos,
+    force = "player",
+    tags = tags,
+  })
+  check(ghost and ghost.valid, "bp: could not create a tagged ghost")
+  local _, b = ghost.revive({ raise_revive = true })
+  check(b and b.valid and b.name == "riscv-combinator", "bp: ghost did not revive")
+
+  -- the rebuilt copy gets its own fresh hidden output combinator...
+  local after = surface.count_entities_filtered({ name = "riscv-combinator-output" })
+  check(
+    after == before + 1,
+    "bp: output combinator not recreated (" .. before .. " -> " .. after .. ")"
+  )
+  -- ...and the source survived, starting stopped so it reassembles on the next Run.
+  local p = remote.call(DEBUG, "peek", b.unit_number)
+  check(p and p.source == BP_SRC, "bp: source did not round-trip through the blueprint")
+  check(
+    p.mode == "stopped",
+    "bp: rebuilt copy should start stopped, got " .. tostring(p and p.mode)
+  )
+end
+
 -- Black box: the test only places entities, wires them, asks the mod (via its
 -- automation remote) to load+run a program, and observes the circuit wires / register
 -- file. ALL execution -- assemble, step, Sample/Commit, the live wire reads and writes
@@ -189,6 +245,7 @@ script.on_nth_tick(1, function(ev)
     e_io = place(surface, { 20, 0 })
     wire_feeder(surface, e_io, "iron-plate", 21)
     check(remote.call(DEBUG, "load", e_io.unit_number, io_example_src()), "io: load failed")
+    run_blueprint_check(surface) -- synchronous: builds a tagged blueprint copy and asserts
     t0 = ev.tick
     return
   end
@@ -206,7 +263,10 @@ script.on_nth_tick(1, function(ev)
 
   if halt_ok and io_ok then
     script.on_nth_tick(1, nil)
-    log("[in-game test] PASSED: example programs + black-box halt + black-box circuit I/O")
+    log(
+      "[in-game test] PASSED: example programs + black-box halt + black-box circuit I/O"
+        .. " + blueprint round-trip"
+    )
   elseif ev.tick > t0 + 80 then
     check(false, "in-game timeout: halt_ok=" .. tostring(halt_ok) .. " io_ok=" .. tostring(io_ok))
   end
