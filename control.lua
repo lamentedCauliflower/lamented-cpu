@@ -389,7 +389,7 @@ local function open_gui(player, unit, cpu)
   rhead.add({ type = "label", caption = "Register" })
   rhead.add({ type = "label", caption = "Value" })
   local regs = left.add({ type = "scroll-pane", name = "regs" })
-  regs.style.maximal_height = 360
+  regs.style.maximal_height = 630
   fill_registers(regs, cpu)
 
   -- centre: control panel
@@ -417,7 +417,7 @@ local function open_gui(player, unit, cpu)
   end
   center.add({ type = "label", caption = "Commands" })
   local codepane = center.add({ type = "scroll-pane", name = "codepane" })
-  codepane.style.maximal_height = 360
+  codepane.style.maximal_height = 630
   codepane.style.width = 540
   local editor = codepane.add({ type = "flow", name = "editor", direction = "horizontal" })
   local gutter = editor.add({ type = "flow", name = "gutter", direction = "vertical" })
@@ -450,7 +450,7 @@ local function open_gui(player, unit, cpu)
   mhead.add({ type = "label", caption = "Address" })
   mhead.add({ type = "label", caption = "Val." })
   local mempane = right.add({ type = "scroll-pane", name = "mem" })
-  mempane.style.maximal_height = 360
+  mempane.style.maximal_height = 630
   fill_memory(mempane, cpu)
 
   storage.viewing[player.index] = unit
