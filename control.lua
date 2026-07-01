@@ -590,6 +590,25 @@ script.on_event(defines.events.on_gui_text_changed, function(event)
   refresh(unit)
 end)
 
+-- Copy-settings paste (#23, ADR-0009): shift-RMB then shift-LMB from one RISC-V
+-- Combinator onto another copies the configuration -- assembly source + master-enable --
+-- reusing Config.apply. Guarded so it is a no-op unless BOTH ends are riscv-combinators:
+-- the entity is a decider-combinator clone, so a vanilla decider paste reaches this event
+-- too. A running destination is forced stopped + dirty and reassembles from the pasted
+-- source on the next Run; no live register/memory/pc state is copied.
+script.on_event(defines.events.on_entity_settings_pasted, function(event)
+  local src, dst = event.source, event.destination
+  if not (src and src.valid and dst and dst.valid and src.name == NAME and dst.name == NAME) then
+    return
+  end
+  local scpu = storage.cpus and storage.cpus[src.unit_number]
+  local dcpu = storage.cpus and storage.cpus[dst.unit_number]
+  if scpu and dcpu then
+    Config.apply(dcpu, scpu) -- a cpu record is itself a valid {source, enabled} config
+    refresh(dst.unit_number) -- reflect the forced stop in any open Inspector on the dest
+  end
+end)
+
 --------------------------------------------------------------- one instr per tick
 script.on_event(defines.events.on_tick, function()
   if not storage.cpus then
