@@ -520,6 +520,13 @@ script.on_event(defines.events.on_gui_click, function(event)
   if not cpu then
     return
   end
+  -- Undo vanilla's right-click-clears-the-textbox on the source editor -- belt for the
+  -- case the engine clears the widget without an on_gui_text_changed. Left-click falls
+  -- through so cursor placement still works.
+  if el.name == "source" and event.button == defines.mouse_button_type.right then
+    el.text = cpu.source or ""
+    return
+  end
   local reassembles = not (cpu.mode == "paused" and not cpu.dirty and cpu.hart)
   if el.name == "riscv_run" then
     if reassembles then
@@ -592,6 +599,15 @@ script.on_event(defines.events.on_gui_text_changed, function(event)
     return
   end
   if el.name == "source" then
+    -- Vanilla clears a text-box on right-click, which fires this event with an empty
+    -- string and would wipe the whole program. Bounce a full wipe back (restore the box
+    -- from the model, leave the model untouched); assigning .text does not re-raise this
+    -- event, so there is no recursion. A deliberate select-all-delete is bounced too --
+    -- a code editor always keeps its content; type over it to replace.
+    if el.text == "" and (cpu.source or "") ~= "" then
+      el.text = cpu.source
+      return
+    end
     Inspector.edit(cpu, el.text)
   else -- riscv_addr: jump to a typed hex address (word-aligned); ignore garbage
     local a = tonumber((el.text:gsub("^0[xX]", "")), 16)
