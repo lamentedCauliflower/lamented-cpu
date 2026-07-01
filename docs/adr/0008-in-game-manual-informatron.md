@@ -37,8 +37,9 @@ installed simply has its adapter skipped.
   already misstate coverage). Instruction/register/CSR/directive pages use structured rows; a
   busted test assembles every documented mnemonic so the Manual cannot claim what the
   Assembler rejects.
-- `info.json` declares `informatron` as a `?` optional dependency, guarded on
-  `remote.interfaces` so a missing backend is a no-op. Moving to `factorio_version` 2.1 to use
-  the 2.1 `recommended` dependency flag is deferred until a 2.1 engine is in the toolchain;
-  the current engine is 2.0.76, and bumping would make the mod fail to load there.
+- `info.json` declares `informatron` as a `+` recommended dependency, guarded on
+  `remote.interfaces` so a missing backend is a no-op. Done 2026-07-01: `factorio_version` is
+  now `2.1` (the recommended `+` prefix needs 2.1), validated on the experimental headless
+  **2.1.9** with **informatron 0.5.0**. nixpkgs still packages only 2.0.76, so `devenv.nix`
+  overrides the experimental headless src to 2.1.9 until nixpkgs catches up.
 - The Inspector's Manual button opens Informatron via `informatron_open_to_page`.
