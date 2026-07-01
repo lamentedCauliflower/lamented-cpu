@@ -8,6 +8,7 @@ local iocontroller = require("lib.iocontroller")
 local iobridge = require("lib.iobridge")
 local SignalMap = require("lib.signalmap")
 local Inspector = require("lib.inspector")
+local Config = require("lib.config")
 local Manual = require("lib.manual")
 
 -- The Manual (ADR-0008): expose the Informatron client interface now, at load time
@@ -140,16 +141,32 @@ local function make_outproxy(e)
   return out
 end
 
+-- Create the storage cpu record + hidden output combinator for a freshly appeared
+-- visible entity (built or cloned). `cfg` is a {source, enabled} config (from blueprint
+-- tags, or a source cpu on clone) or nil for a bare hand-place: nil seeds the tutorial
+-- DEFAULT_SRC. Either way the cpu starts stopped + dirty (Inspector.new) and reassembles
+-- from source on the first Run -- a blueprint/clone never carries the live Hart image
+-- (ADR-0009).
+local function seed_cpu(e, cfg)
+  local cpu = Inspector.new(cfg and cfg.source or DEFAULT_SRC)
+  if cfg then
+    cpu.enabled = cfg.enabled ~= false -- carry master-enable; default On when unset
+  end
+  cpu.entity = e
+  cpu.outproxy = make_outproxy(e)
+  storage.cpus[e.unit_number] = cpu
+  return cpu
+end
+
 local function on_built(event)
   local e = event.entity or event.created_entity
   if not (e and e.valid and e.name == NAME) then
     return
   end
   ensure_tables()
-  local cpu = Inspector.new(DEFAULT_SRC)
-  cpu.entity = e
-  cpu.outproxy = make_outproxy(e)
-  storage.cpus[e.unit_number] = cpu
+  -- Built from a blueprint/ghost? event.tags carries the stamped config (#21); a bare
+  -- hand-place (or script_raised_built) has no tags -> from_tags returns nil -> DEFAULT_SRC.
+  seed_cpu(e, Config.from_tags(event.tags))
 end
 
 local function on_removed(event)
@@ -181,6 +198,35 @@ local removed = {
 for _, ev in pairs(removed) do
   script.on_event(ev, on_removed, { { filter = "name", name = NAME } })
 end
+
+-- Blueprint capture (#21, ADR-0009): when a player sets up a blueprint over an area,
+-- stamp each riscv-combinator's configuration (source + master-enable) into its
+-- blueprint entity tags, so a copy built from the blueprint reassembles the same
+-- program. event.mapping resolves blueprint-entity-index -> the world entity it was
+-- captured from; that same index addresses set_blueprint_entity_tags. The hidden output
+-- combinator is not-blueprintable, so it never appears in the mapping.
+local function on_setup_blueprint(event)
+  local bp = event.stack
+  -- ponytail: covers the blueprint-from-world path (event.stack). Editing an existing
+  -- library blueprint hands back event.record (a LuaRecord) instead; not handled until
+  -- needed -- string export/import and undo/redo already flow through the tags below.
+  if not (bp and bp.valid_for_read) then
+    return
+  end
+  local mapping = event.mapping and event.mapping.get()
+  if not mapping then
+    return
+  end
+  for index, entity in pairs(mapping) do
+    if entity.valid and entity.name == NAME then
+      local cpu = storage.cpus and storage.cpus[entity.unit_number]
+      if cpu then
+        bp.set_blueprint_entity_tags(index, Config.to_tags(cpu))
+      end
+    end
+  end
+end
+script.on_event(defines.events.on_player_setup_blueprint, on_setup_blueprint)
 
 ------------------------------------------------------------------------------ gui
 -- The Inspector window: three columns -- registers | control panel | memory. This
