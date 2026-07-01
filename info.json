@@ -5,10 +5,10 @@
   "author": "lamentedCauliflower",
   "homepage": "https://github.com/lamentedCauliflower/lamented-cpu",
   "description": "A combinator that strictly emulates a RISC-V (RV32IM_Zicsr) CPU, running assembly you write in-world.",
-  "factorio_version": "2.0",
+  "factorio_version": "2.1",
   "dependencies": [
     "base",
-    "? informatron"
+    "+ informatron"
   ],
   "quality_required": false,
   "rail_bridges_required": false,

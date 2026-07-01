@@ -4,9 +4,23 @@ let
   # The headless package for a channel. Lazy: only forced when withGame is true
   # (the fct-paths case interpolates it conditionally), so a busted-only shell
   # never downloads the ~150 MB game binary.
+  # nixpkgs (stable + rolling) still packages 2.0.76 for BOTH channels, so the
+  # experimental headless comes straight from factorio.com (free, no token). Same
+  # tarball layout as 2.0 -- only src/version change.
+  # ponytail: pinned to 2.1.9; bump these two lines per experimental release, and
+  # drop the override once nixpkgs ships factorio-headless-experimental >= 2.1.
+  headlessExperimental = pkgs.factorio-headless-experimental.overrideAttrs (old: rec {
+    version = "2.1.9";
+    src = pkgs.fetchurl {
+      name = "factorio_headless_x64-${version}.tar.xz";
+      url = "https://factorio.com/get-download/${version}/headless/linux64";
+      sha256 = "102r2ryp0igkjb4ya29cpm5338blyqlpcvrmaxcbk4kwhwkl7y9c";
+    };
+  });
+
   headlessFor = channel:
     if channel == "experimental"
-    then pkgs.factorio-headless-experimental
+    then headlessExperimental
     else pkgs.factorio-headless;
 
   # "bin data" pair for the headless server of a channel.
@@ -23,6 +37,24 @@ let
       username = builtins.getEnv "FACTORIO_USERNAME";
       token = builtins.getEnv "FACTORIO_TOKEN";
     };
+
+  # nixpkgs also packages only 2.0.76 for the experimental CLIENT, so `play
+  # experimental` can't load a factorio_version 2.1 mod. Same override as
+  # headlessExperimental, but the full (alpha) client is auth-gated, so the token
+  # goes in the URL (same getEnv posture clientFor already uses; it lands in the
+  # .drv -- fine for a single-user dev env). sha256 from factorio.com/download/
+  # sha256sums (cross-checked against the headless hash).
+  # ponytail: pinned to 2.1.9; bump alongside headlessExperimental per release, and
+  # drop once nixpkgs ships factorio-experimental >= 2.1.
+  clientExperimental = (clientFor "experimental").overrideAttrs (old: rec {
+    version = "2.1.9";
+    src = pkgs.fetchurl {
+      name = "factorio_alpha_x64-${version}.tar.xz";
+      url = "https://factorio.com/get-download/${version}/alpha/linux64"
+        + "?username=${builtins.getEnv "FACTORIO_USERNAME"}&token=${builtins.getEnv "FACTORIO_TOKEN"}";
+      sha256 = "sha256-ni09mm8yPC00IV8mR1FZnZyah6mvLHxL3L7o+418ckU=";
+    };
+  });
 in
 {
   options.withGame = lib.mkOption {
@@ -53,7 +85,7 @@ in
       # ';;' expands to the compiled-in default so busted's own rocks still load.
       LUA_PATH = "./lib/?.lua;./?.lua;;";
     } // (lib.optionalAttrs config.withClient {
-      FACTORIO_CLIENT_EXPERIMENTAL = "${clientFor "experimental"}/bin/factorio";
+      FACTORIO_CLIENT_EXPERIMENTAL = "${clientExperimental}/bin/factorio";
       FACTORIO_CLIENT_STABLE = "${clientFor "stable"}/bin/factorio";
     });
 
