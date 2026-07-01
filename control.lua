@@ -269,21 +269,32 @@ remote.add_interface("lamented-cpu-debug", {
 
 -- fcpu-style gutter: ONE label per source line in a vertical flow beside the text-box
 -- (a single multi-line label collapses -- Factorio labels are single-line). The
--- text-box is sized to fit every line so it never scrolls on its own; gutter + box
--- co-scroll inside the shared scroll-pane, so the numbers can't desync. The PC's line
--- gets a coloured marker, and Run auto-scrolls to it.
+-- text-box is sized to fit every line (height) and its longest line (width) so it never
+-- scrolls on its own; the outer scroll-pane owns both axes -- ONE scrollbar, not a
+-- confusing inner horizontal + outer vertical pair. gutter + box co-scroll inside that
+-- shared pane, so the numbers can't desync. The PC's line gets a coloured marker, and
+-- Run auto-scrolls to it.
 -- ponytail: LINE_H is the text-box's per-line height in px (fcpu's tuned value for the
 -- default UI scale). If the numbers drift from the code in-engine, nudge LINE_H and the
 -- gutter top_padding -- only the full client can show the alignment, not the load-smoke.
 local LINE_H = 20
+-- ponytail: CHAR_W is the text-box's approx px per character -- the horizontal twin of
+-- LINE_H. The box is sized to the longest line so it never shows its OWN horizontal
+-- scrollbar; the outer scroll-pane handles horizontal too, collapsing the old inner+outer
+-- scrollbar pair into one. An over-estimate of the proportional font's width; if a long
+-- line still shows an inner bar in-engine, raise it (only the full client renders it).
+local CHAR_W = 9
 
 local function fill_code(codepane, cpu)
   local editor = codepane.editor
   local gutter, box = editor.gutter, editor.source
   gutter.clear()
-  local n = 0
-  for _ in (cpu.source .. "\n"):gmatch("(.-)\n") do
+  local n, maxlen = 0, 0
+  for line in (cpu.source .. "\n"):gmatch("(.-)\n") do
     n = n + 1
+    if #line > maxlen then
+      maxlen = #line
+    end
   end
   local cur = Inspector.current_line(cpu)
   for i = 1, n do
@@ -294,7 +305,8 @@ local function fill_code(codepane, cpu)
     lbl.style.horizontal_align = "right"
   end
   box.read_only = (cpu.mode == "running")
-  box.style.height = math.max(LINE_H + 8, n * LINE_H + 8) -- fit all lines: no inner scroll
+  box.style.height = math.max(LINE_H + 8, n * LINE_H + 8) -- fit all lines: no inner vscroll
+  box.style.width = math.max(480, maxlen * CHAR_W + 16) -- fit longest line: no inner hscroll
   if cpu.mode == "running" and cur and gutter["g" .. cur] then
     codepane.scroll_to_element(gutter["g" .. cur], "top-third")
   end
@@ -413,8 +425,7 @@ local function open_gui(player, unit, cpu)
   gutter.style.top_padding = 4
   local box = editor.add({ type = "text-box", name = "source", text = cpu.source or "" })
   box.word_wrap = false
-  box.style.width = 480
-  fill_code(codepane, cpu)
+  fill_code(codepane, cpu) -- sizes the box to its content on both axes (see LINE_H/CHAR_W)
   center.add({ type = "label", name = "status", caption = cpu.status or "" })
 
   -- right: memory browser (Inspector 4/5)
