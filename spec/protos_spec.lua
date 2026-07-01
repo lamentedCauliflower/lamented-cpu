@@ -73,3 +73,23 @@ describe("space age build", function()
     }, out.technology.unit.ingredients)
   end)
 end)
+
+describe("entity geometry (#34)", function()
+  local geo = Protos.entity()
+
+  it("is a 3x2 footprint", function()
+    assert.are.equal(3, geo.tile_width)
+    assert.are.equal(2, geo.tile_height)
+    assert.are.same({ { -1.5, -1 }, { 1.5, 1 } }, geo.selection_box)
+  end)
+
+  it("splits the two sides (ADR-0005): input bottom, output top, full 3-tile width", function()
+    assert.are.same({ { -1.5, 0 }, { 1.5, 1 } }, geo.input_connection_bounding_box)
+    assert.are.same({ { -1.5, -1 }, { 1.5, 0 } }, geo.output_connection_bounding_box)
+  end)
+
+  it("is branch-independent -- build() ships the same 3x2 body both ways", function()
+    assert.are.same(geo, Protos.build({ space_age = false }).entity)
+    assert.are.same(geo, Protos.build({ space_age = true }).entity)
+  end)
+end)
