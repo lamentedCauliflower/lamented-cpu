@@ -41,7 +41,6 @@ entity.input_connection_bounding_box = geo.input_connection_bounding_box
 entity.output_connection_bounding_box = geo.output_connection_bounding_box
 entity.fast_replaceable_group = nil -- no longer a drop-in for the 1x2 decider
 entity.energy_source = { type = "void" }
-entity.active_energy_usage = nil
 
 -- Flat placeholder sprite (ADR-0010 tracks Blender art as debt), authored at 32 px/tile
 -- so scale 1 maps 1:1 to tiles. N/S share the 2-wide body, E/W the 3-wide; the shadow is
