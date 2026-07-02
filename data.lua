@@ -40,6 +40,8 @@ entity.selection_box = geo.selection_box
 entity.input_connection_bounding_box = geo.input_connection_bounding_box
 entity.output_connection_bounding_box = geo.output_connection_bounding_box
 entity.fast_replaceable_group = nil -- no longer a drop-in for the 1x2 decider
+entity.energy_source = { type = "void" }
+entity.active_energy_usage = nil
 
 -- Flat placeholder sprite (ADR-0010 tracks Blender art as debt), authored at 32 px/tile
 -- so scale 1 maps 1:1 to tiles. N/S share the 2-wide body, E/W the 3-wide; the shadow is
@@ -105,6 +107,27 @@ out.flags = {
   "not-deconstructable",
   "not-blueprintable",
   "hide-alt-info",
+}
+-- Mirror the visible entity's output_connection_points exactly so the wire from
+-- combinator_output_red/green to circuit_red/green has zero length and is not drawn.
+-- The hidden entity is spawned with the same direction as the visible entity (control.lua).
+out.circuit_wire_connection_points = {
+  {
+    wire = { red = { -0.4, -1.5 }, green = { 0.4, -1.5 } },
+    shadow = { red = { -0.4, -1.5 }, green = { 0.4, -1.5 } },
+  }, -- north
+  {
+    wire = { red = { 1.5, -0.4 }, green = { 1.5, 0.4 } },
+    shadow = { red = { 1.5, -0.4 }, green = { 1.5, 0.4 } },
+  }, -- east
+  {
+    wire = { red = { 0.4, 1.5 }, green = { -0.4, 1.5 } },
+    shadow = { red = { 0.4, 1.5 }, green = { -0.4, 1.5 } },
+  }, -- south
+  {
+    wire = { red = { -1.5, 0.4 }, green = { -1.5, -0.4 } },
+    shadow = { red = { -1.5, 0.4 }, green = { -1.5, -0.4 } },
+  }, -- west
 }
 
 local item = table.deepcopy(data.raw["item"]["constant-combinator"])

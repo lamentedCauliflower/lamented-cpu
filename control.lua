@@ -180,6 +180,7 @@ local function make_outproxy(e)
     name = OUT,
     position = e.position,
     force = e.force,
+    direction = e.direction,
     create_build_effect_smoke = false,
   })
   if not out then
