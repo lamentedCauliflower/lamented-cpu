@@ -10,6 +10,7 @@ local SignalMap = require("lib.signalmap")
 local Inspector = require("lib.inspector")
 local Config = require("lib.config")
 local Manual = require("lib.manual")
+local Overlay = require("lib.overlay")
 
 -- The Manual (ADR-0008): expose the Informatron client interface now, at load time
 -- (remote.add_interface and require are both load-only). No-op if Informatron is
@@ -119,6 +120,58 @@ local function service_doorbell(cpu)
   end
 end
 
+------------------------------------------------------------------- status face (#35)
+-- World-global run-state overlay (ADR-0010): one placeholder glyph drawn over the entity
+-- face and recoloured per Hart mode by the pure lib/overlay mapping. Created on appear,
+-- re-pointed on each transition, destroyed on removal -- event-driven off the Inspector
+-- transitions + the on-tick self-halt check, never per-tick polling. cpu.status_render
+-- holds the LuaRendering object id (a number: survives save/load and re-resolves cleanly).
+
+-- Derive the extended mode key overlay_for expects: a bare "halted" splits into pass/fail
+-- by the tohost result (tohost == 1 is the clean pass, as Inspector.tick reports).
+local function status_key(cpu)
+  if cpu.mode == "halted" then
+    return (cpu.hart and cpu.hart.tohost == 1) and "halted:pass" or "halted:fail"
+  end
+  return cpu.mode
+end
+
+-- Create-or-repoint the overlay to the cpu's current mode. Create-if-missing also recovers
+-- if the persisted rendering ever goes away (e.g. across a version change).
+-- ponytail: the face offset/scale and render layer are placeholder calibration -- only the
+-- full client (or the instrument test) can show the glyph on the face; nudge when tuning.
+local function point_overlay(cpu)
+  local e = cpu.entity
+  if not (e and e.valid) then
+    return
+  end
+  local tok = Overlay.overlay_for(status_key(cpu))
+  local r = cpu.status_render and rendering.get_object_by_id(cpu.status_render)
+  if r and r.valid then
+    r.sprite = tok.sprite
+    r.color = tok.tint
+  else
+    local obj = rendering.draw_sprite({
+      sprite = tok.sprite,
+      tint = tok.tint,
+      surface = e.surface,
+      target = { entity = e, offset = { 0, -0.35 } }, -- upper "screen" area of the face
+      x_scale = 0.6,
+      y_scale = 0.6,
+      render_layer = "higher-object-above",
+    })
+    cpu.status_render = obj and obj.id or nil
+  end
+end
+
+local function drop_overlay(cpu)
+  local r = cpu.status_render and rendering.get_object_by_id(cpu.status_render)
+  if r and r.valid then
+    r.destroy()
+  end
+  cpu.status_render = nil
+end
+
 ----------------------------------------------------------------- entity lifecycle
 -- Place the hidden output combinator on top of the entity and wire it to the
 -- entity's output side, so its committed signals appear on the output wire only.
@@ -127,6 +180,7 @@ local function make_outproxy(e)
     name = OUT,
     position = e.position,
     force = e.force,
+    direction = e.direction,
     create_build_effect_smoke = false,
   })
   if not out then
@@ -155,6 +209,7 @@ local function seed_cpu(e, cfg)
   cpu.entity = e
   cpu.outproxy = make_outproxy(e)
   storage.cpus[e.unit_number] = cpu
+  point_overlay(cpu) -- status face appears with the entity (stopped/idle)
   return cpu
 end
 
@@ -173,8 +228,11 @@ local function on_removed(event)
   local e = event.entity
   if e and e.unit_number and storage.cpus then
     local cpu = storage.cpus[e.unit_number]
-    if cpu and cpu.outproxy and cpu.outproxy.valid then
-      cpu.outproxy.destroy()
+    if cpu then
+      drop_overlay(cpu) -- no orphaned rendering
+      if cpu.outproxy and cpu.outproxy.valid then
+        cpu.outproxy.destroy()
+      end
     end
     storage.cpus[e.unit_number] = nil
   end
@@ -253,6 +311,7 @@ remote.add_interface("lamented-cpu-debug", {
     end
     cpu.source, cpu.dirty = source, true
     Inspector.run(cpu, resolver())
+    point_overlay(cpu) -- automation seam still drives the world-global face
     return cpu.mode == "running"
   end,
   -- inspect the Hart at `unit`: transport mode/status, the loaded source, and the
@@ -556,6 +615,7 @@ script.on_event(defines.events.on_gui_click, function(event)
   else
     return
   end
+  point_overlay(cpu) -- Run/Step/Pause/Stop moved the run-state; re-point the face
   refresh(unit)
 end)
 
@@ -568,6 +628,7 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
   local cpu = unit and storage.cpus[unit]
   if cpu then
     Inspector.enable(cpu, el.switch_state == "right")
+    point_overlay(cpu) -- Off parks a running Hart paused -> re-point the face
     refresh(unit)
   end
 end)
@@ -634,6 +695,7 @@ script.on_event(defines.events.on_entity_settings_pasted, function(event)
   local dcpu = storage.cpus and storage.cpus[dst.unit_number]
   if scpu and dcpu then
     Config.apply(dcpu, scpu) -- a cpu record is itself a valid {source, enabled} config
+    point_overlay(dcpu) -- paste forces the dest stopped -> re-point its face
     refresh(dst.unit_number) -- reflect the forced stop in any open Inspector on the dest
   end
 end)
@@ -673,6 +735,9 @@ script.on_event(defines.events.on_tick, function()
       local was = cpu.mode
       Inspector.tick(cpu)
       service_doorbell(cpu) -- Sample reads wires / Commit drives output
+      if cpu.mode ~= was then
+        point_overlay(cpu) -- self-halt / error only: the face never flickers per-instruction
+      end
       -- ~10 Hz while running; immediate on a mode change (halt/error) so the final
       -- state shows at once. Step/Pause/buttons refresh immediately in their handlers.
       if cpu.mode ~= was or game.tick % 6 == 0 then
