@@ -6,8 +6,8 @@ as debt). Pure stdlib (zlib) -- no Pillow/ImageMagick dependency. Flat solid sha
     python3 scripts/gen-placeholder-art.py
 
 Outputs (committed as the mod's shipped placeholders):
-  graphics/entity/riscv-combinator-h.png  96x64  north/south body (3 wide x 2 tall)
-  graphics/entity/riscv-combinator-v.png  64x96  east/west body  (2 wide x 3 tall)
+  graphics/entity/riscv-combinator-h.png  96x64  east/west body   (3 wide x 2 tall)
+  graphics/entity/riscv-combinator-v.png  64x96  north/south body (2 wide x 3 tall)
   graphics/status/riscv-status.png        32x32  white status disc, tinted per Hart mode
 """
 import os

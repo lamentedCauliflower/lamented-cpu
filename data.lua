@@ -42,7 +42,7 @@ entity.output_connection_bounding_box = geo.output_connection_bounding_box
 entity.fast_replaceable_group = nil -- no longer a drop-in for the 1x2 decider
 
 -- Flat placeholder sprite (ADR-0010 tracks Blender art as debt), authored at 32 px/tile
--- so scale 1 maps 1:1 to tiles. N/S share the 3-wide body, E/W the 2-wide; the shadow is
+-- so scale 1 maps 1:1 to tiles. N/S share the 2-wide body, E/W the 3-wide; the shadow is
 -- the same image redrawn with draw_as_shadow, so there is no separate shadow asset.
 local GFX = "__lamented-cpu__/graphics/entity/"
 local function body4(file, w, h)
@@ -60,14 +60,14 @@ local function body4(file, w, h)
   }
 end
 entity.sprites = {
-  north = body4("riscv-combinator-h.png", 96, 64),
-  south = body4("riscv-combinator-h.png", 96, 64),
-  east = body4("riscv-combinator-v.png", 64, 96),
-  west = body4("riscv-combinator-v.png", 64, 96),
+  north = body4("riscv-combinator-v.png", 64, 96),
+  south = body4("riscv-combinator-v.png", 64, 96),
+  east = body4("riscv-combinator-h.png", 96, 64),
+  west = body4("riscv-combinator-h.png", 96, 64),
 }
 
 -- Per-direction wire attach points (array order N, E, S, W), computed by rotating a
--- north-orientation base set out to the 3x2 edges. ponytail: a first calibration pass --
+-- north-orientation base set out to the short (2-tile) ends. ponytail: a first calibration pass --
 -- the exact offsets need the full client to verify (the load-smoke can't render wires);
 -- nudge the base red/green offsets when tuning against the real art. Two-sidedness itself
 -- is guaranteed by the connection bounding boxes above, not by these visual points.
@@ -88,8 +88,8 @@ local function conn_points(rx, ry, gx, gy)
   end
   return out
 end
-entity.input_connection_points = conn_points(-0.4, 1.0, 0.4, 1.0) -- input side: bottom
-entity.output_connection_points = conn_points(-0.4, -1.0, 0.4, -1.0) -- output side: top
+entity.input_connection_points = conn_points(-0.4, 1.5, 0.4, 1.5) -- input side: bottom short end
+entity.output_connection_points = conn_points(-0.4, -1.5, 0.4, -1.5) -- output side: top short end
 
 -- Hidden output combinator: a script-controlled constant-combinator wired to the
 -- visible entity's output side. Commit rewrites its signals; it alone drives the

@@ -84,20 +84,22 @@ function M.build(opts)
   return { recipe = recipe, technology = technology, item = item, entity = M.entity() }
 end
 
--- Pure entity geometry (#34): a 3x2 footprint replacing the borrowed 1x2 decider box.
--- Branch-independent (same body under vanilla and Space Age). The adapter attaches the
--- placeholder sprites and wire attach points; the two-sided input/output split (ADR-0005)
--- lives in the connection bounding boxes here -- input = bottom (+y), output = top (-y),
--- the decider convention scaled to 3 tiles wide. These auto-rotate with the entity, so
+-- Pure entity geometry (#34): a 3x2 footprint replacing the borrowed 1x2 decider box,
+-- authored 2 wide x 3 tall at north so the circuit connections sit on the short (2-tile)
+-- ends, not the 3-tile flanks. Branch-independent (same body under vanilla and Space
+-- Age). The adapter attaches the placeholder sprites and wire attach points; the
+-- two-sided input/output split (ADR-0005) lives in the connection bounding boxes here --
+-- input = bottom short side (+y), output = top short side (-y), the decider convention
+-- (output where the entity faces) unchanged. These auto-rotate with the entity, so
 -- sources always wire to the input side and a Commit can never feed the next Sample.
 function M.entity()
   return {
-    tile_width = 3,
-    tile_height = 2,
-    selection_box = { { -1.5, -1 }, { 1.5, 1 } },
-    collision_box = { { -1.4, -0.9 }, { 1.4, 0.9 } }, -- inset from the tile edges
-    input_connection_bounding_box = { { -1.5, 0 }, { 1.5, 1 } }, -- bottom half
-    output_connection_bounding_box = { { -1.5, -1 }, { 1.5, 0 } }, -- top half
+    tile_width = 2,
+    tile_height = 3,
+    selection_box = { { -1, -1.5 }, { 1, 1.5 } },
+    collision_box = { { -0.9, -1.4 }, { 0.9, 1.4 } }, -- inset from the tile edges
+    input_connection_bounding_box = { { -1, 0 }, { 1, 1.5 } }, -- bottom half
+    output_connection_bounding_box = { { -1, -1.5 }, { 1, 0 } }, -- top half
   }
 end
 
