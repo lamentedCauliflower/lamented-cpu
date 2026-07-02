@@ -33,7 +33,7 @@ function M.build(opts)
           { type = "item", name = "supercapacitor", amount = 2 },
           { type = "item", name = "processing-unit", amount = 3 },
         },
-        prerequisites = { "electromagnetic-plant" },
+        prerequisites = { "advanced-combinators", "electromagnetic-science-pack" },
         science = { "electromagnetic-science-pack", 1 }, -- extra unit pack on Fulgora
       }
     or {

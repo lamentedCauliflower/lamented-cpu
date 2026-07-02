@@ -60,9 +60,15 @@ describe("space age build", function()
     }, out.recipe.ingredients)
   end)
 
-  it("technology is Fulgora-gated via the electromagnetic-plant prerequisite", function()
-    assert.are.same({ "electromagnetic-plant" }, out.technology.prerequisites)
-  end)
+  it(
+    "technology is Fulgora-gated via advanced-combinators + electromagnetic-science-pack",
+    function()
+      assert.are.same(
+        { "advanced-combinators", "electromagnetic-science-pack" },
+        out.technology.prerequisites
+      )
+    end
+  )
 
   it("unit adds the electromagnetic science pack", function()
     assert.are.same({
