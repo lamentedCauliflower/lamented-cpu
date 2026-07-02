@@ -1,0 +1,54 @@
+---------------------------------------------------------------------------------------------------
+Version: 1.0.0
+Date: 2026-07-02
+  Features:
+    - 3x2 four-way RISC-V Combinator body + placeholder art
+    - add riscv-tests assembly fixtures and gen-riscv-tests
+    - Assembler emits addr→source-line map for Inspector
+    - Assembler rich-text tag hardening
+    - blank Inspector views when stopped
+    - blueprint round-trips a RISC-V Combinator's source + enable
+    - Circuit I/O walking skeleton — echo one signal end to end
+    - clone carries source + enable and recreates the output combinator
+    - complete RV32I ALU — all arithmetic/logical rv32ui-p green
+    - copy-settings paste carries source + enable between RISC-V Combinators
+    - full Commit + output lifecycle — atomic, latch, reset
+    - full Sample semantics — colours, merge, overflow
+    - Inspector changed-cell highlights + refresh cadence
+    - Inspector defaults to On but stopped
+    - Inspector Manual button opens the documentation backend ([#29](https://github.com/lamentedCauliflower/lamented-cpu/issues/29))
+    - Inspector memory browser — word-windowed hex + region presets
+    - Inspector panel margins
+    - Inspector Pause button becomes Stop while paused
+    - Inspector register viewer — x0..x31 + pc + CSRs
+    - Inspector walking skeleton — 3-column window + transport/enable
+    - M extension — full rv32um-p green
+    - M-mode CSR/trap core — in-scope rv32mi-p subset green
+    - Manual "Anatomy of a Program" chapter + comment the park loop
+    - Manual assembler-reference, examples, extensions chapters ([#28](https://github.com/lamentedCauliflower/lamented-cpu/issues/28))
+    - Manual calling-convention, memory-model, CSRs/traps chapters ([#26](https://github.com/lamentedCauliflower/lamented-cpu/issues/26))
+    - Manual Circuit I/O chapter ([#27](https://github.com/lamentedCauliflower/lamented-cpu/issues/27))
+    - Manual instruction-set + pseudo-instruction chapters ([#25](https://github.com/lamentedCauliflower/lamented-cpu/issues/25))
+    - Manual walking skeleton (neutral IR + Booktorio/Informatron adapters)
+    - merge feat/gamification into main
+    - move circuit I/O to the combinator short ends
+    - pure Inspector core — Enable×Transport state machine + lifecycle
+    - research-gate the RISC-V Combinator (vanilla)
+    - RISC-V Combinator entity — placeable, assembly GUI, 1 instr/tick
+    - RV32I control flow — branch/jump rv32ui-p green
+    - RV32I load/store — all widths + misaligned, rv32ui-p green
+    - Space-Age-aware recipe for the RISC-V Combinator
+    - status-face overlay for the Hart run-state
+    - taller Inspector window (+75%)
+    - target Factorio 2.1.x experimental
+    - walking skeleton — Lua RV32 assembler + hart, first test green
+  Bugfixes:
+    - add Informatron category title locale key
+    - add Informatron menu_ locale key for the Manual category
+    - build Manual menu/pages at load, not via runtime require
+    - [combinator] hide outproxy wires and remove power requirement
+    - Inspector gutter — per-line labels + co-scroll (fcpu-style)
+    - Inspector panel interior padding
+    - one scrollbar in the source editor, not a nested pair
+    - right-click no longer clears the source editor
+    - service I/O doorbells on Step, not just Run
