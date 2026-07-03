@@ -40,6 +40,14 @@ Assembler against the Test env), not its prebuilt binaries. "Correct" means the
 relevant TVMs (`rv32ui-p`, `rv32um-p`, `rv32mi-p`) pass.
 _Avoid_: Test suite, the tests (when ambiguous), spec tests.
 
+**riscv-vector-tests**:
+The generated conformance suite (`chipsalliance/riscv-vector-tests`) that defines
+correct behaviour for the Hart's vector extension, the same way `riscv-tests` defines it
+for RV32IM_Zicsr. Vendored as generated assembly sources at a pinned generator + Spike
+revision and the mod's fixed VLEN; "the Hart implements V" means the full `zve32x`
+preset passes. Self-checking via the same `tohost` convention as `riscv-tests`.
+_Avoid_: Vector tests (ambiguous), RVV suite, the generator.
+
 **Test env**:
 The small machine-mode harness — reset vector, trap handler, and `tohost` — that wraps
 a `riscv-tests` body so it runs on our Hart. A minimal in-repo replacement for
@@ -70,7 +78,9 @@ conformance Host interface above.
 **Circuit-network controller**:
 The memory-mapped peripheral that bridges the Hart to Factorio's circuit network — the
 in-game realization of the Host interface. A device at a fixed address that the Program
-image drives with ordinary loads and stores. (Name provisional.)
+image drives with ordinary loads and stores. Its trigger registers (Sample, Commit) are
+rung with scalar stores only — a vector store there faults rather than half-works; its
+data buffers are ordinary memory, vector included. (Name provisional.)
 _Avoid_: I/O combinator, bridge, virtual combinator.
 
 **Signal map**:
