@@ -83,9 +83,10 @@ Assembler resolves to the save's ID; programs are thus portable as source, not a
 _Avoid_: Signal table, channel map, datasheet, raw signal index.
 
 **Input snapshot**:
-The frozen copy of the input wires' signals taken at the instant of a Sample. The
-Program image reads from this copy, so the circuit network changing after a Sample
-cannot perturb a computation already in flight.
+The frozen copy of input-wire signals taken at the instant of a Sample — everything
+present (Full sample) or the answers to the Query registers (Query sample). The Program
+image reads from this copy, so the circuit network changing after a Sample cannot
+perturb a computation already in flight.
 _Avoid_: Input buffer, read buffer.
 
 **Output staging**:
@@ -95,8 +96,23 @@ _Avoid_: Output buffer, write buffer.
 
 **Sample**:
 The trigger that latches the chosen input wire(s) — red, green, or both — into the Input
-snapshot.
+snapshot. Comes in two kinds: Full sample and Query sample.
 _Avoid_: Read, poll.
+
+**Full sample**:
+A Sample that captures every signal present on the chosen wires, largest value first.
+_Avoid_: Dump, bulk read, plain sample.
+
+**Query sample**:
+A Sample that answers only the signals named in the Query registers, one result per
+register, instead of capturing everything. A queried signal absent from the wires reads
+as zero, matching the circuit network's own convention.
+_Avoid_: Lookup, targeted sample, poll.
+
+**Query registers**:
+The program-owned slots, sixteen of them, each naming one signal the program wants a
+Query sample to answer. They persist until the Program image overwrites them.
+_Avoid_: Watch list, lookup registers, Q slots.
 
 **Commit**:
 The trigger that flushes the Output staging atomically onto the controller's output,

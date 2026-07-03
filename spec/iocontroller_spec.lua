@@ -39,9 +39,24 @@ describe("controller Sample", function()
     local mem = Mem.new()
     io.sample(mem, { red = { [1] = 5, [2] = 1 }, green = { [1] = 3, [3] = 9 } }, 3)
     local n, p = read_snapshot(mem)
-    -- ids sorted: 1 -> 5+3=8, 2 -> 1 (red only), 3 -> 9 (green only)
+    -- 1 -> 5+3=8, 2 -> 1 (red only), 3 -> 9 (green only); largest value first
     assert.are.equal(3, n)
-    assert.are.same({ { id = 1, value = 8 }, { id = 2, value = 1 }, { id = 3, value = 9 } }, p)
+    assert.are.same({ { id = 3, value = 9 }, { id = 1, value = 8 }, { id = 2, value = 1 } }, p)
+  end)
+
+  it("pairs come descending by signed value, negatives after positives", function()
+    local mem = Mem.new()
+    io.sample(mem, { red = { [1] = 5, [2] = -2000000, [3] = 80 } }, 1)
+    local _, p = read_snapshot(mem)
+    assert.are.same({ 3, 1, 2 }, { p[1].id, p[2].id, p[3].id })
+    assert.are.equal(0xFFE17B80, p[3].value) -- -2000000 as the stored word
+  end)
+
+  it("equal values tie-break ascending by id", function()
+    local mem = Mem.new()
+    io.sample(mem, { red = { [30] = 7, [10] = 7, [20] = 7 } }, 1)
+    local _, p = read_snapshot(mem)
+    assert.are.same({ 10, 20, 30 }, { p[1].id, p[2].id, p[3].id })
   end)
 
   it("snapshot is iterable and a specific resolved id is findable", function()
@@ -80,8 +95,8 @@ describe("controller Sample", function()
     local n, p = read_snapshot(mem)
     assert.are.equal(256, n) -- count capped
     assert.are.equal(1, status(mem) % 2) -- overflow bit set
-    assert.are.equal(1, p[1].id) -- kept the lowest-id entries
-    assert.are.equal(256, p[256].id)
+    assert.are.equal(300, p[1].id) -- kept the largest-value entries
+    assert.are.equal(45, p[256].id) -- 300 down to 45; 44..1 dropped
   end)
 
   it("a fresh non-overflowing Sample clears a previously-set overflow bit", function()
@@ -93,6 +108,86 @@ describe("controller Sample", function()
     io.sample(mem, { red = red }, 1) -- overflow
     io.sample(mem, { red = { [1] = 1 } }, 1) -- fits
     assert.are.equal(0, status(mem) % 2)
+  end)
+end)
+
+-- Query sample (SAMPLE doorbell bit2, ADR-0011): Q1..Q16 hold ids the program
+-- owns; the snapshot block answers them positionally with echoed-id pairs.
+local function write_queries(mem, ids)
+  for i, id in ipairs(ids) do
+    mem:w32(io.BASE + io.QUERY + (i - 1) * 4, id)
+  end
+end
+
+local function read_pair(mem, n)
+  local at = io.BASE + io.SNAPSHOT + 4 + (n - 1) * 8
+  return mem:r32(at), mem:r32(at + 4)
+end
+
+describe("controller Query sample", function()
+  it("answers Qn into pair n, echoing the id; word0 counts hits", function()
+    local mem = Mem.new()
+    write_queries(mem, { 7, 0, 0, 0, 37 }) -- Q1 = 7, Q5 = 37, gaps unused
+    io.sample(mem, { red = { [7] = 80, [12] = 5 } }, 5) -- query | red
+    assert.are.equal(1, mem:r32(io.BASE + io.SNAPSHOT)) -- 7 hit, 37 missed
+    local id, v = read_pair(mem, 1)
+    assert.are.same({ 7, 80 }, { id, v })
+    id, v = read_pair(mem, 5)
+    assert.are.same({ 37, 0 }, { id, v }) -- miss: id echoed, value 0
+    id, v = read_pair(mem, 2)
+    assert.are.same({ 0, 0 }, { id, v }) -- unused slot
+  end)
+
+  it("Query registers persist across Samples", function()
+    local mem = Mem.new()
+    write_queries(mem, { 7 })
+    io.sample(mem, { red = { [7] = 1 } }, 5)
+    io.sample(mem, { red = { [7] = 2 } }, 5) -- no rewrite of Q1
+    local _, v = read_pair(mem, 1)
+    assert.are.equal(2, v)
+  end)
+
+  it("colour bits still pick the wires", function()
+    local mem = Mem.new()
+    write_queries(mem, { 7 })
+    io.sample(mem, { red = { [7] = 80 }, green = { [7] = 9 } }, 6) -- query | green
+    local _, v = read_pair(mem, 1)
+    assert.are.equal(9, v)
+  end)
+
+  it("a red/green zero-sum is a hit with value 0, not a miss", function()
+    local mem = Mem.new()
+    write_queries(mem, { 7 })
+    io.sample(mem, { red = { [7] = 5 }, green = { [7] = -5 } }, 7) -- query | both
+    assert.are.equal(1, mem:r32(io.BASE + io.SNAPSHOT)) -- present on the wires
+    local _, v = read_pair(mem, 1)
+    assert.are.equal(0, v)
+  end)
+
+  it("clears a previous full sample's overflow bit (it never truncates)", function()
+    local mem = Mem.new()
+    local red = {}
+    for id = 1, 300 do
+      red[id] = id
+    end
+    io.sample(mem, { red = red }, 1) -- overflow -> bit0 set
+    write_queries(mem, { 7 })
+    io.sample(mem, { red = { [7] = 1 } }, 5)
+    assert.are.equal(0, status(mem) % 2)
+  end)
+
+  it("writes exactly 16 pairs; the snapshot tail keeps the last full sample", function()
+    local mem = Mem.new()
+    local red = {}
+    for id = 1, 20 do
+      red[id] = id
+    end
+    io.sample(mem, { red = red }, 1) -- pairs 17..20 land past the query window
+    local keep_id, keep_v = read_pair(mem, 17)
+    write_queries(mem, { 7 })
+    io.sample(mem, { red = { [7] = 1 } }, 5)
+    local id, v = read_pair(mem, 17)
+    assert.are.same({ keep_id, keep_v }, { id, v }) -- stale but untouched
   end)
 end)
 

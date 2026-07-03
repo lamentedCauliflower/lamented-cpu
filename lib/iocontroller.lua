@@ -7,12 +7,18 @@
 --
 -- Memory map (the ABI the Program image addresses with lw/sw), offsets from BASE:
 --   0x000 STATUS    (RO) bit0 = snapshot overflow
---   0x004 SAMPLE    (WO) doorbell; value = colour mask (1=red 2=green 3=both)
+--   0x004 SAMPLE    (WO) doorbell; bit0 = red, bit1 = green, bit2 = query mode
 --   0x008 COMMIT    (WO) doorbell; flush staging
---   0x100 SNAPSHOT       word0 = count, then (id, value) pairs  <- Sample fills
+--   0x010 Q1..Q16   (RW) Query registers: signal ids, program-owned, persistent
+--   0x100 SNAPSHOT       full sample:  word0 = pair count, then (id, value)
+--                        pairs descending by signed value, ties ascending by id
+--                        query sample: word0 = hit count, then exactly 16
+--                        (id, value) pairs, Qn -> pair n (miss/unused = value 0)
 --   0x800 STAGING        word0 = count, then (id, value) pairs  <- program fills
 -- The two buffers cannot both sit in one +/-2KiB lw/sw window, so programs keep a
--- base register per region (ADR-0005).
+-- base register per region (ADR-0005). Sort order, truncation, and the query
+-- mode are ADR-0011. The Query registers sit just past the 16-byte doorbell
+-- window hart.lua watches, so id stores are plain RAM writes.
 local rv = require("lib.rvbit")
 local band, bor, bnot, u32, signed = rv.band, rv.bor, rv.bnot, rv.u32, rv.signed
 
@@ -25,9 +31,12 @@ M.BASE = 0x10000000
 M.STATUS = 0x000
 M.SAMPLE = 0x004
 M.COMMIT = 0x008
+M.QUERY = 0x010 -- Q1..Q16, one id word each
+M.QCOUNT = 16
 M.SNAPSHOT = 0x100
 M.STAGING = 0x800
 M.CAP = 256 -- (id, value) entries per buffer
+M.QUERY_MODE = 4 -- SAMPLE doorbell bit2: query sample instead of full sample
 
 -- Merge the chosen wires: colour mask bit0 = red, bit1 = green; "both" (3) sums
 -- same-id values across red and green, matching Factorio's native circuit merge.
@@ -46,24 +55,67 @@ local function merge(input, colour)
   return out
 end
 
--- Fill the Input snapshot from the input wires. `input` = { red = {id=value},
--- green = {id=value} }; ids are already Signal-map IDs (the adapter mapped them).
-function M.sample(mem, input, colour)
-  local merged = merge(input, colour)
+-- Query sample (ADR-0011): answer the program's standing Query registers from
+-- the merged input instead of dumping everything. Pair n mirrors Qn even when
+-- Q slots are unused, so results are at fixed offsets; the id is echoed back
+-- and a miss (or unused Qn = 0) reads as value 0, matching an absent signal.
+-- word0 counts hits -- ids present in the merge, a red/green zero-sum included.
+local function query(mem, merged)
+  local hits = 0
+  for i = 1, M.QCOUNT do
+    local id = mem:r32(M.BASE + M.QUERY + (i - 1) * 4)
+    local v = merged[id]
+    if v then
+      hits = hits + 1
+    end
+    local at = M.BASE + M.SNAPSHOT + 4 + (i - 1) * 8
+    mem:w32(at, id)
+    mem:w32(at + 4, u32(v or 0))
+  end
+  mem:w32(M.BASE + M.SNAPSHOT, hits)
+end
+
+-- Full sample: dump the whole merge, largest signal first. Programs read the
+-- most significant signals at the top; a truncated snapshot keeps the top CAP.
+-- Values compare as the signed words the program will lw (a wrapped sum sorts
+-- where its wrapped value belongs); ties break ascending by id for determinism.
+local function full(mem, merged)
   local ids = {}
   for id in pairs(merged) do
     ids[#ids + 1] = id
   end
-  table.sort(ids) -- deterministic snapshot order so programs can scan it
-  local n, overflow = #ids, false
-  if n > M.CAP then -- truncate to the lowest-id CAP entries, flag overflow
-    n, overflow = M.CAP, true
+  table.sort(ids, function(a, b)
+    local va, vb = signed(u32(merged[a])), signed(u32(merged[b]))
+    if va ~= vb then
+      return va > vb
+    end
+    return a < b
+  end)
+  local n = #ids
+  if n > M.CAP then
+    n = M.CAP
   end
   mem:w32(M.BASE + M.SNAPSHOT, n)
   for i = 1, n do
     local at = M.BASE + M.SNAPSHOT + 4 + (i - 1) * 8
     mem:w32(at, ids[i])
     mem:w32(at + 4, u32(merged[ids[i]]))
+  end
+  return #ids > M.CAP
+end
+
+-- Fill the Input snapshot from the input wires. `input` = { red = {id=value},
+-- green = {id=value} }; ids are already Signal-map IDs (the adapter mapped them).
+-- `colour` is the raw SAMPLE doorbell value: bit0/bit1 pick the wires, bit2
+-- picks a query sample over a full one. bit0 of STATUS reflects the most recent
+-- Sample of either kind -- a query never truncates, so it clears the bit.
+function M.sample(mem, input, colour)
+  local merged = merge(input, colour)
+  local overflow = false
+  if band(colour, M.QUERY_MODE) ~= 0 then
+    query(mem, merged)
+  else
+    overflow = full(mem, merged)
   end
   -- own STATUS bit0 only; read-modify-write so Commit's drop flag (slice 3)
   -- survives a later Sample.

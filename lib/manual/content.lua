@@ -521,14 +521,14 @@ local csrs_traps = {
 -- Circuit I/O (#27): the mod-specific content. Accurate to lib/iocontroller.lua
 -- (the MMIO map, doorbell offsets, CAP, STATUS bits) and lib/signalmap.lua.
 local IO_EXAMPLE = [[
-# Read both input wires, echo the first signal back at double its value.
+# Read both input wires, echo the largest signal back at double its value.
   li   s0, 0x10000000   # controller base: STATUS / SAMPLE / COMMIT / SNAPSHOT
   li   t0, 3
   sw   t0, 0x004(s0)    # SAMPLE both colours (red | green)
   lw   t1, 0x100(s0)    # t1 = number of signals sampled
   beqz t1, done         # nothing on the wires? skip
-  lw   t2, 0x104(s0)    # id    of the first sampled signal
-  lw   t3, 0x108(s0)    # value of the first sampled signal
+  lw   t2, 0x104(s0)    # id    of the largest sampled signal (pairs sort by value)
+  lw   t3, 0x108(s0)    # value of the largest sampled signal
   add  t3, t3, t3       # double it
   li   s1, 0x10000800   # STAGING base: too far from s0 for one lw/sw offset
   li   t0, 1
@@ -561,9 +561,15 @@ local circuit_io = {
         "read",
         "bit0 = last Sample overflowed; bit1 = last Commit dropped an id",
       },
-      { "0x004", "SAMPLE", "write", "doorbell; value is the colour mask 1=red, 2=green, 3=both" },
+      {
+        "0x004",
+        "SAMPLE",
+        "write",
+        "doorbell; bit0 = red, bit1 = green (1=red, 2=green, 3=both), bit2 = query sample",
+      },
       { "0x008", "COMMIT", "write", "doorbell; flush the staging buffer (value ignored)" },
-      { "0x100", "SNAPSHOT", "read", "word0 = count, then (id, value) pairs, ascending by id" },
+      { "0x010", "Q1–Q16", "both", "Query registers: one signal id per word — you fill these" },
+      { "0x100", "SNAPSHOT", "read", "word0 = count, then (id, value) pairs, largest value first" },
       { "0x800", "STAGING", "write", "word0 = count, then (id, value) pairs — you fill this" },
     }),
     p(
@@ -578,8 +584,24 @@ local circuit_io = {
         .. "changing afterwards cannot perturb a computation already in flight. With the "
         .. "'both' mask the two wires are summed per id, matching Factorio's own merge. "
         .. "You then read SNAPSHOT: word0 is the count, followed by that many id/value "
-        .. "pairs sorted by id. If more than 256 signals were present, the lowest 256 are "
-        .. "kept and STATUS bit0 is set."
+        .. "pairs sorted descending by signed value — the largest signal is always the "
+        .. "first pair — with equal values ordered by id. If more than 256 signals were "
+        .. "present, the largest 256 are kept and STATUS bit0 is set."
+    ),
+    h2("Query sample"),
+    p(
+      "Scanning a full snapshot for one signal costs a loop per entry; a query sample "
+        .. "answers up to 16 signals you name in advance, at fixed offsets, in one Sample. "
+        .. "Store each signal's id into a Query register (Q1 at 0x010 … Q16 at 0x04C, "
+        .. "0 = slot unused) — they are ordinary memory you own, written once and kept "
+        .. "across Samples. Then store the colour mask plus 4 to SAMPLE (5 = query red, "
+        .. "6 = query green, 7 = query both). Instead of the full dump, SNAPSHOT word0 "
+        .. "becomes the number of queries that found their signal on the wires, and pair "
+        .. "n answers Qn: the id echoed back, then the value. A signal absent from the "
+        .. "wires reads as value 0, like everywhere else in the circuit network; if the "
+        .. "hit count is short, scan your pairs for the value-0 entries. A query sample "
+        .. "writes only word0 and the 16 pairs — anything beyond is stale — and clears "
+        .. "STATUS bit0, since a query never overflows."
     ),
     p(
       "Output works in reverse. You build a set in the Output staging buffer — count "
