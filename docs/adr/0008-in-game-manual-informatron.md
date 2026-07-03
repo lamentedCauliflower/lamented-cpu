@@ -43,3 +43,7 @@ installed simply has its adapter skipped.
   **2.1.9** with **informatron 0.5.0**. nixpkgs still packages only 2.0.76, so `devenv.nix`
   overrides the experimental headless src to 2.1.9 until nixpkgs catches up.
 - The Inspector's Manual button opens Informatron via `informatron_open_to_page`.
+- Done 2026-07-03: the anticipated second renderer exists — the **Wiki mirror**
+  (CONTEXT.md), `lib/manual/markdown.lua`, renders the same IR to GitHub-wiki Markdown;
+  `.github/workflows/wiki.yml` publishes it to the wiki repo on every push to main. The
+  wiki is a build artifact, never hand-edited.

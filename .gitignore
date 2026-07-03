@@ -25,3 +25,6 @@ devenv.local.yaml
 
 # Factorio dev sandbox (saves, mods, logs, generated config)
 .factorio/
+
+# generated Wiki mirror (scripts/render-wiki.lua)
+build/

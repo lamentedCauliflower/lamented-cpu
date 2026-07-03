@@ -122,3 +122,10 @@ convention, the memory/execution model, CSRs and traps, and Circuit I/O. Grows b
 chapter per extension the mod adds. Distinct from the Inspector (the live debugger); the
 Manual is static reference, not a view of any one Hart.
 _Avoid_: Docs, help, wiki, guide, tooltip.
+
+**Wiki mirror**:
+The GitHub-wiki rendering of the Manual — the same chapters, generated from the same
+source as the in-game Manual and published by CI, one wiki page per chapter. A pure
+build artifact: never hand-edited, always overwritten on the next publish, and never
+containing content the in-game Manual lacks.
+_Avoid_: The wiki (when ambiguous), online docs, GitHub docs.

@@ -200,11 +200,11 @@ INI
     scripts.lint.exec = ''
       # Explicit mod paths: avoid walking .factorio/ (dev sandbox with a
       # symlink back to the repo root). Add your own lua roots here as the mod grows.
-      exec luacheck lib data.lua control.lua instrument-control.lua
+      exec luacheck lib data.lua control.lua instrument-control.lua scripts/render-wiki.lua
     '';
 
     scripts.fmt.exec = ''
-      exec stylua lib data.lua control.lua spec
+      exec stylua lib data.lua control.lua spec scripts/render-wiki.lua
     '';
 
     scripts.package.exec = ''

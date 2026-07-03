@@ -1,0 +1,44 @@
+name: Wiki
+
+# Publish the Wiki mirror (CONTEXT.md): render the Manual IR to Markdown and push it
+# to the wiki repo. The wiki is a build artifact — hand edits are overwritten here.
+# One-time setup: the .wiki.git repo only exists after a first page is created in the
+# GitHub UI; until then the clone below fails.
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+      - name: Render wiki mirror
+        run: nix shell nixpkgs#lua5_2 -c lua scripts/render-wiki.lua build/wiki
+        env:
+          LUA_PATH: "./lib/?.lua;./?.lua;;"
+      - name: Publish to wiki (diff-gated)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.wiki.git" /tmp/wiki
+          rm -f /tmp/wiki/*.md
+          cp build/wiki/*.md /tmp/wiki/
+          cd /tmp/wiki
+          git add -A
+          if git diff --cached --quiet; then
+            echo "wiki already up to date"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "docs: regenerate wiki mirror from ${GITHUB_SHA}"
+          git push
