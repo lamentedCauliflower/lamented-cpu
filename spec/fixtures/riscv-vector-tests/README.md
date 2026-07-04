@@ -23,14 +23,19 @@ pinned Spike, so every `TEST_CASE` compare is an oracle fact, not ours.
 
 ## Vendor pipeline (dev-only, never on the CI gate path)
 
-Per instruction: generator (Go) emits a stage-1 `.S`; it is compiled with a bare-metal
-RISC-V gcc against the generator's `riscv-test-env/p`; **pspike** (Spike + a magic
-`custom-0` instruction) executes it and prints the golden `TEST_CASE` patches; the
-generator's **merger** splices them into a self-checking stage-2 `.S`; stage-2 is
-verified under stock pinned Spike; finally stage-2 is flattened with `cpp` against our
-Test env into the committed `.s`. Issue #38 wraps this in a `gen-riscv-vector-tests`
-devenv command.
+One command regenerates the whole set: **`gen-riscv-vector-tests`** (devenv, see
+`devenv.nix`). Per instruction: the generator (Go) emits a stage-1 `.S`; it is
+compiled with a bare-metal RISC-V gcc against the generator's `riscv-test-env/p`;
+**pspike** (Spike + a magic `custom-0` instruction) executes it and prints the golden
+`TEST_CASE` patches; the generator's **merger** splices them into a self-checking
+stage-2 `.S`; stage-2 is verified under stock pinned Spike; finally stage-2 is
+flattened with `cpp` against our Test env into the committed `.s`. Generation is
+deterministic (the generator's randomness is input-seeded): a regeneration from the
+same pins reproduces the set byte-for-byte.
 
-The allowlist in `spec/conformance_spec.lua` grows per instruction family (#37..#47).
-The extension ships — `misa` V bit, Manual chapter — only when the **full zve32x
-preset** is present and green (#47, ADR-0012).
+The full preset is ~1.1k files / ~1.5 GB of assembly text (it packs down ~8:1 in git,
+and `spec` is `export-ignore`d, so none of it reaches the released mod zip) — the
+repo-growth cost ADR-0012 accepts. The allowlist in `spec/conformance_spec.lua` grows
+per instruction family (#37..#47); unlisted fixtures are inert text until their slice
+lands. The extension ships — `misa` V bit, Manual chapter — only when the **full
+zve32x preset** is green (#47, ADR-0012).
