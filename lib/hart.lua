@@ -177,6 +177,196 @@ local VOPI = {
   end, -- vsra
 }
 
+-- fixed-point rounding: floor(val / 2^d) plus the vxrm increment computed
+-- from the shifted-out bits (rnu/rne/rdn/rod). Exact for |val| < 2^53.
+local function roundoff(val, d, rm)
+  if d == 0 then
+    return val
+  end
+  local q = math.floor(val / 2 ^ d)
+  local low = val % 2 ^ d
+  local half = 2 ^ (d - 1)
+  if rm == 0 then -- rnu: round half up
+    return low >= half and q + 1 or q
+  elseif rm == 1 then -- rne: round half to even
+    if low > half or (low == half and q % 2 == 1) then
+      return q + 1
+    end
+    return q
+  elseif rm == 2 then -- rdn: truncate
+    return q
+  end
+  -- rod: jam the low bit if anything was shifted out
+  if low ~= 0 and q % 2 == 0 then
+    return q + 1
+  end
+  return q
+end
+
+-- sew-wide products, low and high halves, with per-operand signedness. A
+-- product below SEW=32 is exact in a double; SEW=32 goes through mul64u the
+-- same way the scalar M extension does.
+local function vmullo(a, b, sew)
+  if sew < 32 then
+    return (a * b) % 2 ^ sew
+  end
+  local _, lo = mul64u(a, b)
+  return lo
+end
+
+local function vmulhi(a, b, sew, sa, sb)
+  if sew < 32 then
+    local ea = sa and sxt(a, sew) or a
+    local eb = sb and sxt(b, sew) or b
+    return math.floor(ea * eb / 2 ^ sew)
+  end
+  local hi = mul64u(a, b)
+  if sa and a >= 0x80000000 then
+    hi = hi - b
+  end
+  if sb and b >= 0x80000000 then
+    hi = hi - a
+  end
+  return hi
+end
+
+-- OP-V multiply/divide/remainder by funct6 (OPMVV/OPMVX): same signature as
+-- VOPI. Divide semantics mirror the scalar M extension at element width:
+-- divide by zero yields all-ones (or the dividend for remainder), and the
+-- most-negative / -1 overflow wraps.
+local VOPM = {
+  [0x08] = function(a, b, _, rm)
+    return roundoff(a + b, 1, rm)
+  end, -- vaaddu
+  [0x09] = function(a, b, s, rm)
+    return roundoff(sxt(a, s) + sxt(b, s), 1, rm)
+  end, -- vaadd
+  [0x0A] = function(a, b, _, rm)
+    return roundoff(a - b, 1, rm)
+  end, -- vasubu
+  [0x0B] = function(a, b, s, rm)
+    return roundoff(sxt(a, s) - sxt(b, s), 1, rm)
+  end, -- vasub
+  [0x20] = function(a, b, s)
+    return b == 0 and 2 ^ s - 1 or udiv(a, b)
+  end, -- vdivu
+  [0x21] = function(a, b, s)
+    local sa, sb = sxt(a, s), sxt(b, s)
+    if sb == 0 then
+      return 2 ^ s - 1
+    elseif sa == -(2 ^ (s - 1)) and sb == -1 then
+      return a
+    end
+    local q = udiv(sa < 0 and -sa or sa, sb < 0 and -sb or sb)
+    return (sa < 0) ~= (sb < 0) and -q or q
+  end, -- vdiv
+  [0x22] = function(a, b)
+    return b == 0 and a or a - udiv(a, b) * b
+  end, -- vremu
+  [0x23] = function(a, b, s)
+    local sa, sb = sxt(a, s), sxt(b, s)
+    if sb == 0 then
+      return a
+    elseif sa == -(2 ^ (s - 1)) and sb == -1 then
+      return 0
+    end
+    local q = udiv(sa < 0 and -sa or sa, sb < 0 and -sb or sb)
+    q = (sa < 0) ~= (sb < 0) and -q or q
+    return sa - q * sb
+  end, -- vrem
+  [0x24] = function(a, b, s)
+    return vmulhi(a, b, s, false, false)
+  end, -- vmulhu
+  [0x25] = vmullo, -- vmul
+  [0x26] = function(a, b, s)
+    return vmulhi(a, b, s, true, false)
+  end, -- vmulhsu (vs2 signed, operand unsigned)
+  [0x27] = function(a, b, s)
+    return vmulhi(a, b, s, true, true)
+  end, -- vmulh
+}
+
+-- vsmul: (a*b) >> (sew-1) with vxrm rounding; the only overflow is
+-- (-2^(sew-1))^2, which saturates to the positive max. SEW=32 needs the
+-- 64-bit product as (signed high, unsigned low) limbs: the shifted value is
+-- hi*2 + lo[31] and the shifted-out bits are lo[30:0].
+local function vsmul_f(a, b, sew, rm)
+  local sa, sb = sxt(a, sew), sxt(b, sew)
+  if sa == -(2 ^ (sew - 1)) and sb == sa then
+    return 2 ^ (sew - 1) - 1, true
+  end
+  if sew < 32 then
+    return roundoff(sa * sb, sew - 1, rm), false
+  end
+  local hi, lo = mul64u(a, b)
+  if a >= 0x80000000 then
+    hi = hi - b
+  end
+  if b >= 0x80000000 then
+    hi = hi - a
+  end
+  hi = signed(u32(hi))
+  local q = hi * 2 + rsh(lo, 31)
+  local low = band(lo, 0x7FFFFFFF)
+  local half = 2 ^ 30
+  if rm == 0 then
+    q = low >= half and q + 1 or q
+  elseif rm == 1 then
+    if low > half or (low == half and q % 2 == 1) then
+      q = q + 1
+    end
+  elseif rm == 3 then
+    if low ~= 0 and q % 2 == 0 then
+      q = q + 1
+    end
+  end
+  return q, false
+end
+
+-- fixed-point OP-V by funct6 (OPIVV/X/I): f(vs2 element, operand, sew, rm)
+-- -> value, saturated. Saturating adds/subs clamp and report vxsat; the
+-- scaling shifts only round.
+local VFIX = {
+  [0x20] = function(a, b, s)
+    local r = a + b
+    if r > 2 ^ s - 1 then
+      return 2 ^ s - 1, true
+    end
+    return r, false
+  end, -- vsaddu
+  [0x21] = function(a, b, s)
+    local r = sxt(a, s) + sxt(b, s)
+    if r > 2 ^ (s - 1) - 1 then
+      return 2 ^ (s - 1) - 1, true
+    elseif r < -(2 ^ (s - 1)) then
+      return -(2 ^ (s - 1)), true
+    end
+    return r, false
+  end, -- vsadd
+  [0x22] = function(a, b)
+    if b > a then
+      return 0, true
+    end
+    return a - b, false
+  end, -- vssubu
+  [0x23] = function(a, b, s)
+    local r = sxt(a, s) - sxt(b, s)
+    if r > 2 ^ (s - 1) - 1 then
+      return 2 ^ (s - 1) - 1, true
+    elseif r < -(2 ^ (s - 1)) then
+      return -(2 ^ (s - 1)), true
+    end
+    return r, false
+  end, -- vssub
+  [0x27] = vsmul_f,
+  [0x2A] = function(a, b, s, rm)
+    return roundoff(a, band(b, s - 1), rm), false
+  end, -- vssrl
+  [0x2B] = function(a, b, s, rm)
+    return roundoff(sxt(a, s), band(b, s - 1), rm), false
+  end, -- vssra
+}
+
 -- single-width integer reductions by funct6 (OPMVV): f(accumulator, vs2
 -- element, sew) -> next accumulator; the accumulator is seeded from vs1[0]
 local VRED = {
@@ -670,6 +860,133 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
           val = velt_get(v, rs2, sew, e)
         end
         velt_set(v, rd, sew, e, val)
+      end
+    elseif opiv and VFIX[f6] then
+      local f = VFIX[f6]
+      local rm = band(csr[VXRM] or 0, 3)
+      local sat = false
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local val, s2 = f(velt_get(v, rs2, sew, e), bval(e), sew, rm)
+          velt_set(v, rd, sew, e, val)
+          sat = sat or s2
+        end
+      end
+      if sat then -- sticky, mirrored into vcsr[0]
+        csr[VXSAT] = 1
+        csr[VCSR] = bor(lsh(band(csr[VXRM] or 0, 3), 1), 1)
+      end
+    elseif opiv and f6 >= 0x2C and f6 <= 0x2F then
+      -- narrowing shifts (vnsrl/vnsra) and clips (vnclipu/vnclip): vs2 is
+      -- read at 2*SEW, shift amounts use lg2(2*SEW) bits, clips round per
+      -- vxrm then saturate to SEW range with vxsat reporting
+      local dsew = sew * 2
+      if dsew > 32 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      local rm = band(csr[VXRM] or 0, 3)
+      local sat = false
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local a, b = velt_get(v, rs2, dsew, e), bval(e)
+          local sh = band(b, dsew - 1)
+          local val
+          if f6 == 0x2C then
+            val = math.floor(a / 2 ^ sh) -- vnsrl
+          elseif f6 == 0x2D then
+            val = math.floor(sxt(a, dsew) / 2 ^ sh) -- vnsra
+          elseif f6 == 0x2E then -- vnclipu
+            val = roundoff(a, sh, rm)
+            if val > 2 ^ sew - 1 then
+              val, sat = 2 ^ sew - 1, true
+            end
+          else -- vnclip
+            val = roundoff(sxt(a, dsew), sh, rm)
+            if val > 2 ^ (sew - 1) - 1 then
+              val, sat = 2 ^ (sew - 1) - 1, true
+            elseif val < -(2 ^ (sew - 1)) then
+              val, sat = -(2 ^ (sew - 1)), true
+            end
+          end
+          velt_set(v, rd, sew, e, val)
+        end
+      end
+      if sat then
+        csr[VXSAT] = 1
+        csr[VCSR] = bor(lsh(band(csr[VXRM] or 0, 3), 1), 1)
+      end
+    elseif (f3 == 2 or f3 == 6) and VOPM[f6] then
+      local f = VOPM[f6]
+      local rm = band(csr[VXRM] or 0, 3)
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          velt_set(v, rd, sew, e, f(velt_get(v, rs2, sew, e), bval(e), sew, rm))
+        end
+      end
+    elseif (f3 == 2 or f3 == 6) and (f6 == 0x29 or f6 == 0x2B or f6 == 0x2D or f6 == 0x2F) then
+      -- multiply-accumulate: vd is both source and destination. vmacc/vnmsac
+      -- accumulate the vs1*vs2 product into vd; vmadd/vnmsub multiply vd and
+      -- overwrite it (the operand from bval is always the multiplier vs1/rs1).
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local a, b = velt_get(v, rs2, sew, e), bval(e)
+          local d = velt_get(v, rd, sew, e)
+          local val
+          if f6 == 0x2D then
+            val = d + vmullo(a, b, sew) -- vmacc
+          elseif f6 == 0x2F then
+            val = d - vmullo(a, b, sew) -- vnmsac
+          elseif f6 == 0x29 then
+            val = vmullo(d, b, sew) + a -- vmadd
+          else
+            val = a - vmullo(d, b, sew) -- vnmsub
+          end
+          velt_set(v, rd, sew, e, val)
+        end
+      end
+    elseif (f3 == 2 or f3 == 6) and f6 >= 0x30 then
+      -- widening add/sub/multiply/accumulate: destination elements at 2*SEW
+      -- (2*SEW > ELEN=32 is reserved). The .w add/sub forms (0x34-0x37) read
+      -- vs2 already wide; the MACs (0x3C-0x3F) accumulate into wide vd.
+      local dsew = sew * 2
+      if dsew > 32 or f6 == 0x39 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      local dmask = 2 ^ dsew - 1
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local b = bval(e)
+          local val
+          if f6 <= 0x37 then
+            local wide = f6 >= 0x34
+            local a = velt_get(v, rs2, wide and dsew or sew, e)
+            if band(f6, 1) == 1 then -- signed variant
+              a = sxt(a, wide and dsew or sew)
+              b = sxt(b, sew)
+            end
+            val = band(f6, 2) == 2 and a - b or a + b
+          elseif f6 == 0x38 or f6 == 0x3A or f6 == 0x3B then
+            local a = velt_get(v, rs2, sew, e)
+            if f6 ~= 0x38 then
+              a = sxt(a, sew) -- vwmulsu/vwmul: vs2 signed
+            end
+            if f6 == 0x3B then
+              b = sxt(b, sew) -- vwmul: both signed
+            end
+            val = a * b
+          else
+            local a = velt_get(v, rs2, sew, e)
+            if f6 == 0x3D then -- vwmacc: both signed
+              a, b = sxt(a, sew), sxt(b, sew)
+            elseif f6 == 0x3E then -- vwmaccus: rs1 unsigned, vs2 signed
+              a = sxt(a, sew)
+            elseif f6 == 0x3F then -- vwmaccsu: vs1 signed, vs2 unsigned
+              b = sxt(b, sew)
+            end
+            val = velt_get(v, rd, dsew, e) + a * b
+          end
+          velt_set(v, rd, dsew, e, band(val, dmask))
+        end
       end
     elseif f3 == 2 and VRED[f6] then
       -- reductions collapse active vs2 elements into vd[0], seeded from

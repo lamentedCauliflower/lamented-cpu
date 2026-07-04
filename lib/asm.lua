@@ -523,8 +523,21 @@ function M.assemble(src, resolver)
     vsll = 0x25,
     vsrl = 0x28,
     vsra = 0x29,
+    -- fixed-point (#44)
+    vsaddu = 0x20,
+    vsadd = 0x21,
+    vssubu = 0x22,
+    vssub = 0x23,
+    vsmul = 0x27,
+    vssrl = 0x2A,
+    vssra = 0x2B,
+    -- narrowing shifts and clips (#44): .wv/.wx/.wi, vs2 at 2*SEW
+    vnsrl = 0x2C,
+    vnsra = 0x2D,
+    vnclipu = 0x2E,
+    vnclip = 0x2F,
   }
-  local VSUFF = { vv = 0, vx = 4, vi = 3, vvm = 0, vxm = 4, vim = 3 }
+  local VSUFF = { vv = 0, vx = 4, vi = 3, vvm = 0, vxm = 4, vim = 3, wv = 0, wx = 4, wi = 3 }
   -- vmv.v.* is vmerge's encoding with vm=1 and vs2=0
   local VMV = { ["vmv.v.v"] = 0, ["vmv.v.i"] = 3, ["vmv.v.x"] = 4 }
   -- VXUNARY0 (OPMVV funct6=0x12): vs1 field encodes the widening factor/sign
@@ -548,6 +561,74 @@ function M.assemble(src, resolver)
     vredmax = { 0x07, 2 },
     vwredsumu = { 0x30, 0 },
     vwredsum = { 0x31, 0 },
+  }
+
+  -- OP-V multiply/divide/MAC/averaging/widening families, keyed by the full
+  -- mnemonic: { funct6, funct3, swap }. funct3 is OPMVV=2 or OPMVX=6; swap
+  -- marks the multiply-accumulates, whose assembly order is vd, vs1, vs2
+  -- (multiplier first) instead of vd, vs2, vs1.
+  local VM6 = {
+    ["vaaddu.vv"] = { 0x08, 2 },
+    ["vaaddu.vx"] = { 0x08, 6 },
+    ["vaadd.vv"] = { 0x09, 2 },
+    ["vaadd.vx"] = { 0x09, 6 },
+    ["vasubu.vv"] = { 0x0A, 2 },
+    ["vasubu.vx"] = { 0x0A, 6 },
+    ["vasub.vv"] = { 0x0B, 2 },
+    ["vasub.vx"] = { 0x0B, 6 },
+    ["vdivu.vv"] = { 0x20, 2 },
+    ["vdivu.vx"] = { 0x20, 6 },
+    ["vdiv.vv"] = { 0x21, 2 },
+    ["vdiv.vx"] = { 0x21, 6 },
+    ["vremu.vv"] = { 0x22, 2 },
+    ["vremu.vx"] = { 0x22, 6 },
+    ["vrem.vv"] = { 0x23, 2 },
+    ["vrem.vx"] = { 0x23, 6 },
+    ["vmulhu.vv"] = { 0x24, 2 },
+    ["vmulhu.vx"] = { 0x24, 6 },
+    ["vmul.vv"] = { 0x25, 2 },
+    ["vmul.vx"] = { 0x25, 6 },
+    ["vmulhsu.vv"] = { 0x26, 2 },
+    ["vmulhsu.vx"] = { 0x26, 6 },
+    ["vmulh.vv"] = { 0x27, 2 },
+    ["vmulh.vx"] = { 0x27, 6 },
+    ["vmadd.vv"] = { 0x29, 2, true },
+    ["vmadd.vx"] = { 0x29, 6, true },
+    ["vnmsub.vv"] = { 0x2B, 2, true },
+    ["vnmsub.vx"] = { 0x2B, 6, true },
+    ["vmacc.vv"] = { 0x2D, 2, true },
+    ["vmacc.vx"] = { 0x2D, 6, true },
+    ["vnmsac.vv"] = { 0x2F, 2, true },
+    ["vnmsac.vx"] = { 0x2F, 6, true },
+    ["vwaddu.vv"] = { 0x30, 2 },
+    ["vwaddu.vx"] = { 0x30, 6 },
+    ["vwadd.vv"] = { 0x31, 2 },
+    ["vwadd.vx"] = { 0x31, 6 },
+    ["vwsubu.vv"] = { 0x32, 2 },
+    ["vwsubu.vx"] = { 0x32, 6 },
+    ["vwsub.vv"] = { 0x33, 2 },
+    ["vwsub.vx"] = { 0x33, 6 },
+    ["vwaddu.wv"] = { 0x34, 2 },
+    ["vwaddu.wx"] = { 0x34, 6 },
+    ["vwadd.wv"] = { 0x35, 2 },
+    ["vwadd.wx"] = { 0x35, 6 },
+    ["vwsubu.wv"] = { 0x36, 2 },
+    ["vwsubu.wx"] = { 0x36, 6 },
+    ["vwsub.wv"] = { 0x37, 2 },
+    ["vwsub.wx"] = { 0x37, 6 },
+    ["vwmulu.vv"] = { 0x38, 2 },
+    ["vwmulu.vx"] = { 0x38, 6 },
+    ["vwmulsu.vv"] = { 0x3A, 2 },
+    ["vwmulsu.vx"] = { 0x3A, 6 },
+    ["vwmul.vv"] = { 0x3B, 2 },
+    ["vwmul.vx"] = { 0x3B, 6 },
+    ["vwmaccu.vv"] = { 0x3C, 2, true },
+    ["vwmaccu.vx"] = { 0x3C, 6, true },
+    ["vwmacc.vv"] = { 0x3D, 2, true },
+    ["vwmacc.vx"] = { 0x3D, 6, true },
+    ["vwmaccus.vx"] = { 0x3E, 6, true },
+    ["vwmaccsu.vv"] = { 0x3F, 2, true },
+    ["vwmaccsu.vx"] = { 0x3F, 6, true },
   }
 
   -- VMUNARY0 (OPMVV funct6=0x14): vs1 field encodes the operation
@@ -904,8 +985,17 @@ function M.assemble(src, resolver)
       emit(function()
         return eVmem(fm.op, fm.w, vm, rs1, r2, fm.mop, fm.nf, vd)
       end)
-    elseif VF6[m:match("^(v%w+)%.")] and VSUFF[m:match("%.(v[vxi]m?)$")] then
-      local f6, f3 = VF6[m:match("^(v%w+)%.")], VSUFF[m:match("%.(v[vxi]m?)$")]
+    elseif m == "vmsgt.vv" or m == "vmsgtu.vv" then
+      -- pseudo-instructions (no .vv encoding of their own): swap the sources
+      -- onto vmslt(u).vv
+      local f6 = m == "vmsgt.vv" and 0x1B or 0x1A
+      local vd, va, vb = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      local vm = o[4] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(f6, vm, vb, va, 0, vd)
+      end)
+    elseif VF6[m:match("^(v%w+)%.")] and VSUFF[m:match("%.([vw][vxi]m?)$")] then
+      local f6, f3 = VF6[m:match("^(v%w+)%.")], VSUFF[m:match("%.([vw][vxi]m?)$")]
       local vd, vs2 = vreg(o[1]), vreg(o[2])
       -- carry/merge forms name v0 as their final operand; masked forms say v0.t
       local vm = (m:sub(-1) == "m" or o[4] == "v0.t") and 0 or 1
@@ -967,6 +1057,15 @@ function M.assemble(src, resolver)
       local vd, rs1 = vreg(o[1]), reg(o[2])
       emit(function()
         return eV(0x10, 1, 0, rs1, 6, vd)
+      end)
+    elseif VM6[m] then
+      local t = VM6[m]
+      local o2, o3 = o[t[3] and 3 or 2], o[t[3] and 2 or 3]
+      local vd, vs2 = vreg(o[1]), vreg(o2)
+      local vs1 = t[2] == 6 and reg(o3) or vreg(o3)
+      local vm = o[4] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(t[1], vm, vs2, vs1, t[2], vd)
       end)
     elseif VMUN[m] then
       -- VMUNARY0: the operation code rides the vs1 field
