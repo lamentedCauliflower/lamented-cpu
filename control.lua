@@ -398,6 +398,29 @@ local function fill_registers(pane, cpu)
   end
 end
 
+-- vector pane (#42): readout line + a v0..v31 element grid at the live SEW.
+-- Collapsed by default so scalar-only debugging keeps today's layout; while
+-- collapsed the refresh skips it entirely (nothing to keep current).
+local function fill_vectors(pane, cpu)
+  if not pane.visible then
+    return
+  end
+  pane.clear()
+  if not cpu.hart then
+    pane.add({ type = "label", caption = "(not assembled)" })
+    return
+  end
+  pane.add({ type = "label", caption = Inspector.vector_readout(cpu.hart) })
+  local rows = Inspector.vector_rows(cpu.hart)
+  local t = pane.add({ type = "table", name = "t", column_count = #rows[1].cells + 1 })
+  for _, row in ipairs(rows) do
+    t.add({ type = "label", caption = row.label })
+    for _, cell in ipairs(row.cells) do
+      t.add({ type = "label", caption = cell })
+    end
+  end
+end
+
 local MEM_ROWS = 16 -- ponytail: the fixed window IS the virtualization (Factorio has none)
 
 local function fill_memory(pane, cpu)
@@ -450,6 +473,11 @@ local function open_gui(player, unit, cpu)
   local regs = left.add({ type = "scroll-pane", name = "regs" })
   regs.style.maximal_height = 630
   fill_registers(regs, cpu)
+  -- vector pane (#42), below the scalar register file, collapsed by default
+  left.add({ type = "button", name = "riscv_vectoggle", caption = "▶ Vector" })
+  local vec = left.add({ type = "scroll-pane", name = "vec" })
+  vec.style.maximal_height = 300
+  vec.visible = false
 
   -- centre: control panel
   local center = body.add({
@@ -534,6 +562,7 @@ local function refresh(unit)
         c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
         c.transport.riscv_pause.caption = pause_caption(cpu)
         fill_registers(frame.body.left.regs, cpu)
+        fill_vectors(frame.body.left.vec, cpu)
         fill_memory(frame.body.right.mem, cpu)
       end
     end
@@ -606,6 +635,12 @@ script.on_event(defines.events.on_gui_click, function(event)
     else
       Inspector.pause(cpu)
     end
+  elseif el.name == "riscv_vectoggle" then
+    -- expand/collapse the vector pane; works in any mode since it only touches
+    -- visibility and the refresh below repaints the now-visible content
+    local vec = el.parent.vec
+    vec.visible = not vec.visible
+    el.caption = vec.visible and "▼ Vector" or "▶ Vector"
   elseif el.name == "riscv_memup" then
     cpu.mem_base = math.max(0, (cpu.mem_base or 0x80000000) - MEM_ROWS * 4)
     cpu.prev_mem = nil

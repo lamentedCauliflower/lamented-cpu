@@ -210,6 +210,62 @@ function M.region_base(hart, region)
   return 0x80000000
 end
 
+-- vector pane view-model (#42): the readout line and the v0..v31 rows, split by the
+-- live vtype SEW. Display layer only -- element extraction mirrors the Hart's layout
+-- (VLEN=128, 4 little-endian u32 words per register) without reaching into its
+-- private helpers, same as the ABI/CSR duplication above.
+local VSTART, VL, VTYPE = 0x008, 0xC20, 0xC21
+local VILL = 0x80000000
+local LMUL_NAMES = { [0] = "m1", "m2", "m4", "m8", nil, "mf8", "mf4", "mf2" }
+
+-- decoded vtype in vsetvli-argument form ("e32m1,ta,ma"), or "vill"
+local function vtype_decode(vt)
+  if bit32.band(vt, VILL) ~= 0 then
+    return "vill"
+  end
+  local sew = bit32.lshift(8, bit32.band(bit32.rshift(vt, 3), 7))
+  local lmul = LMUL_NAMES[bit32.band(vt, 7)] or "m?"
+  local ta = bit32.band(vt, 0x40) ~= 0 and "ta" or "tu"
+  local ma = bit32.band(vt, 0x80) ~= 0 and "ma" or "mu"
+  return ("e%d%s,%s,%s"):format(sew, lmul, ta, ma)
+end
+
+function M.vector_readout(hart)
+  local csr = hart.csr
+  return ("vl=%d  vtype=%s  vstart=%d"):format(
+    csr[VL] or 0,
+    vtype_decode(csr[VTYPE] or VILL),
+    csr[VSTART] or 0
+  )
+end
+
+-- one row per vector register, elements as fixed-width hex cells at the live
+-- SEW (element 0 leftmost). Under vill there is no SEW, so fall back to the
+-- raw 32-bit word view.
+function M.vector_rows(hart)
+  local vt = hart.csr[VTYPE] or VILL
+  local sew = 32
+  if bit32.band(vt, VILL) == 0 then
+    sew = bit32.lshift(8, bit32.band(bit32.rshift(vt, 3), 7))
+  end
+  local fmt = ("%%0%dx"):format(sew / 4)
+  local rows = {}
+  for r = 0, 31 do
+    local reg = hart.v and hart.v[r] or { 0, 0, 0, 0 }
+    local cells = {}
+    for e = 0, 128 / sew - 1 do
+      local byte = e * (sew / 8)
+      local val = reg[math.floor(byte / 4) + 1] or 0
+      if sew < 32 then
+        val = bit32.band(bit32.rshift(val, (byte % 4) * 8), sew == 8 and 0xFF or 0xFFFF)
+      end
+      cells[e + 1] = fmt:format(val)
+    end
+    rows[r + 1] = { label = "v" .. r, cells = cells }
+  end
+  return rows
+end
+
 -- changed-cell diff for the highlight (#20): which rows of `cur` differ in value from
 -- `prev` (writes only). A nil prev is the post-reset/post-nav baseline -- nothing
 -- flashes. Rows are compared by index, so the adapter clears prev on navigation.
