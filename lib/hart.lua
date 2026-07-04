@@ -16,8 +16,9 @@ M.__index = M
 local MTVEC, MEPC, MCAUSE, MTVAL = 0x305, 0x341, 0x342, 0x343
 local MISA = 0x301
 local MSTATUS = 0x300
--- misa: MXL=1 (RV32, bits 31:30 = 01) with the I and M extension bits set.
-local MISA_RV32IM = 0x40000000 + 0x100 + 0x1000
+-- misa: MXL=1 (RV32, bits 31:30 = 01) with the I, M, and V extension bits set.
+-- V ships with #47: the full zve32x preset is green (ADR-0012's gate).
+local MISA_RV32IM = 0x40000000 + 0x100 + 0x1000 + 0x200000
 local CAUSE_ILLEGAL = 2
 
 -- Zve32x at fixed VLEN=128 (ADR-0012). Vector CSRs, the mstatus.VS field, and

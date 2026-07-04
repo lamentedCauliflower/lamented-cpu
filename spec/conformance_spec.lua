@@ -545,6 +545,10 @@ local VFAMILIES = {
   { "vmv8r_v", 1 },
   { "vmv_s_x", 1 },
   { "vmv_x_s", 1 },
+  -- #47 ship flip: the configuration-instruction fixtures complete the preset
+  { "vsetivli", 1 },
+  { "vsetvl", 1 },
+  { "vsetvli", 1 },
 }
 local VALLOW = {}
 for _, fam in ipairs(VFAMILIES) do
@@ -584,4 +588,25 @@ describe("riscv-vector-tests conformance", function()
       conformance(VFIXTURES, name, 2000000)
     end)
   end
+
+  -- #47 ship gate (ADR-0012): the allowlist is a completeness assertion over
+  -- the whole vendored zve32x preset. A regeneration that adds fixtures fails
+  -- here instead of silently shrinking coverage; a typo'd family name fails
+  -- as a missing file in the runner above.
+  it("allowlists the entire vendored zve32x preset", function()
+    local allowed = {}
+    for _, name in ipairs(VALLOW) do
+      allowed[name] = true
+    end
+    local missing = {}
+    local p = assert(io.popen("ls '" .. VFIXTURES .. "'"))
+    for f in p:lines() do
+      local base = f:match("^(.+)%.s$")
+      if base and not allowed[base] then
+        missing[#missing + 1] = base
+      end
+    end
+    p:close()
+    assert.are.same({}, missing)
+  end)
 end)

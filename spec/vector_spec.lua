@@ -249,3 +249,11 @@ describe("vector state is plain data", function()
     assert.are.equal(3, h.v[15][4])
   end)
 end)
+
+describe("misa V bit (#47 ship flip)", function()
+  it("misa advertises V now that the full zve32x preset is green", function()
+    local h = run([[ csrr t0, misa ]])
+    -- MXL=RV32 + I + M (the base) with bit 21 (V) newly set
+    assert.are.equal(0x40201100, h.x[5])
+  end)
+end)
