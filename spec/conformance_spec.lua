@@ -6,6 +6,7 @@ local Mem = require("mem")
 local Hart = require("hart")
 
 local FIXTURES = "spec/fixtures/riscv-tests/"
+local VFIXTURES = "spec/fixtures/riscv-vector-tests/"
 
 -- ponytail: the allowlist grows one slice at a time. Slices #5-#6 add the
 -- load/store and control-flow fixtures; #9 adds rv32um (M extension).
@@ -75,6 +76,15 @@ local ALLOW = {
   "rv32mi-p-shamt",
 }
 
+-- Zve32x conformance: riscv-vector-tests fixtures (ADR-0012), same pipeline,
+-- separate allowlist -- it grows per instruction family until the full zve32x
+-- preset is green (#37..#47; the ship gate lives in #47).
+local VALLOW = {
+  -- #37 walking skeleton
+  "vadd_vv-0",
+  "vadd_vv-1",
+}
+
 local function read(path)
   local f = assert(io.open(path, "r"), "missing fixture: " .. path)
   local s = f:read("*a")
@@ -82,16 +92,28 @@ local function read(path)
   return s
 end
 
+local function conformance(dir, name, max_steps)
+  local image = asm.assemble(read(dir .. name .. ".s"))
+  local hart = Hart.new(Mem.new())
+  hart:load(image)
+  local r = hart:run({ max_steps = max_steps })
+  assert.is_truthy(r.tohost, "no tohost write within step budget (hung?)")
+  local testnum = math.floor((r.tohost or 0) / 2)
+  assert.are.equal(1, r.tohost, "failed at test #" .. testnum)
+end
+
 describe("riscv-tests conformance", function()
   for _, name in ipairs(ALLOW) do
     it(name .. " passes", function()
-      local image = asm.assemble(read(FIXTURES .. name .. ".s"))
-      local hart = Hart.new(Mem.new())
-      hart:load(image)
-      local r = hart:run({ max_steps = 200000 })
-      assert.is_truthy(r.tohost, "no tohost write within step budget (hung?)")
-      local testnum = math.floor((r.tohost or 0) / 2)
-      assert.are.equal(1, r.tohost, "failed at test #" .. testnum)
+      conformance(FIXTURES, name, 200000)
+    end)
+  end
+end)
+
+describe("riscv-vector-tests conformance", function()
+  for _, name in ipairs(VALLOW) do
+    it(name .. " passes", function()
+      conformance(VFIXTURES, name, 2000000)
     end)
   end
 end)

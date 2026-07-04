@@ -15,9 +15,18 @@ M.__index = M
 
 local MTVEC, MEPC, MCAUSE, MTVAL = 0x305, 0x341, 0x342, 0x343
 local MISA = 0x301
+local MSTATUS = 0x300
 -- misa: MXL=1 (RV32, bits 31:30 = 01) with the I and M extension bits set.
 local MISA_RV32IM = 0x40000000 + 0x100 + 0x1000
 local CAUSE_ILLEGAL = 2
+
+-- Zve32x at fixed VLEN=128 (ADR-0012). Vector CSRs, the mstatus.VS field, and
+-- the vill bit of vtype.
+local VSTART, VXSAT, VXRM, VCSR = 0x008, 0x009, 0x00A, 0x00F
+local VL, VTYPE, VLENB = 0xC20, 0xC21, 0xC22
+local VLEN = 128
+local MSTATUS_VS = 0x600 -- bits 10:9; 0 = Off (vector instructions trap)
+local VILL = 0x80000000
 
 -- 32x32 -> 64-bit unsigned product via 16-bit limbs, so every term stays below
 -- 2^34 and is exact in a double. Returns high, low (each unsigned 32-bit).
@@ -47,7 +56,57 @@ function M.new(mem)
   for i = 0, 31 do
     x[i] = 0
   end
-  return setmetatable({ mem = mem, x = x, pc = 0x80000000, csr = { [MISA] = MISA_RV32IM } }, M)
+  -- 32 vector registers as plain word tables (serializable Factorio storage
+  -- data). Reset state: VS = Initial (vector instructions execute; the Test
+  -- env's csrs is then a no-op), vtype = vill until the first vset.
+  local v = {}
+  for i = 0, 31 do
+    v[i] = { 0, 0, 0, 0 }
+  end
+  local csr = {
+    [MISA] = MISA_RV32IM,
+    [MSTATUS] = 0x200,
+    [VTYPE] = VILL,
+    [VL] = 0,
+    [VLENB] = VLEN / 8,
+    [VSTART] = 0,
+    [VXSAT] = 0,
+    [VXRM] = 0,
+    [VCSR] = 0,
+  }
+  return setmetatable({ mem = mem, x = x, pc = 0x80000000, csr = csr, v = v }, M)
+end
+
+-- element access at eew (8/16/32) with LMUL register grouping: element e of
+-- the group based at v[base] lives at byte offset e*eew/8, VLEN/8 bytes per
+-- register, little-endian words within.
+local function velt_get(v, base, eew, e)
+  local byte = e * (eew / 8)
+  local reg = v[base + math.floor(byte / 16)]
+  local wi = math.floor((byte % 16) / 4) + 1
+  if eew == 32 then
+    return reg[wi]
+  end
+  local sh = (byte % 4) * 8
+  return band(rsh(reg[wi], sh), eew == 8 and 0xFF or 0xFFFF)
+end
+
+local function velt_set(v, base, eew, e, val)
+  local byte = e * (eew / 8)
+  local reg = v[base + math.floor(byte / 16)]
+  local wi = math.floor((byte % 16) / 4) + 1
+  if eew == 32 then
+    reg[wi] = u32(val)
+    return
+  end
+  local sh = (byte % 4) * 8
+  local mask = (eew == 8 and 0xFF or 0xFFFF)
+  reg[wi] = bor(band(reg[wi], bnot(lsh(mask, sh))), lsh(band(val, mask), sh))
+end
+
+-- mask bit e is bit e of v0 (mask layout is independent of SEW/LMUL)
+local function mask_bit(v, e)
+  return band(rsh(v[0][math.floor(e / 32) + 1], e % 32), 1)
 end
 
 function M:load(image)
@@ -285,12 +344,154 @@ function M:step()
           self.csr[c] = band(old, bnot(u32(src)))
         end
       end
+      -- vcsr is an architectural mirror of vxrm[2:1] | vxsat[0]; writes to
+      -- either side land on both (ADR-0012)
+      if c == VCSR then
+        local nv = self.csr[c] or 0
+        self.csr[VXRM], self.csr[VXSAT] = band(rsh(nv, 1), 3), band(nv, 1)
+      elseif c == VXRM or c == VXSAT then
+        self.csr[VXRM] = band(self.csr[VXRM] or 0, 3)
+        self.csr[VXSAT] = band(self.csr[VXSAT] or 0, 1)
+        self.csr[VCSR] = bor(lsh(self.csr[VXRM], 1), self.csr[VXSAT])
+      end
     end
+  elseif op == 0x57 or op == 0x07 or op == 0x27 then -- Zve32x (ADR-0012)
+    npc = self:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
   elseif op ~= 0x0F then -- fence is a nop for a single hart; anything else is illegal
     error(string.format("illegal/unimplemented opcode 0x%02x at pc=0x%08x", op, self.pc))
   end
 
   self.pc = npc
+end
+
+-- VLMAX for a candidate vtype, or nil when the vtype is unsupported here
+-- (reserved bits, reserved LMUL, SEW > ELEN=32, or LMUL < SEW/ELEN).
+local function vlmax_of(vt)
+  if band(vt, 0xFFFFFF00) ~= 0 then
+    return nil
+  end
+  local sew = lsh(8, band(rsh(vt, 3), 7))
+  local lm = band(vt, 7)
+  local num, den
+  if lm <= 3 then
+    num, den = lsh(1, lm), 1
+  elseif lm >= 5 then
+    num, den = 1, lsh(1, 8 - lm)
+  else
+    return nil
+  end
+  if sew > 32 or num * 32 < sew * den then
+    return nil
+  end
+  return math.floor(VLEN * num / (den * sew))
+end
+
+-- Zve32x decode/execute: configuration (op 0x57 funct3=7), OP-V arithmetic
+-- (0x57), unit-stride loads (0x07) and stores (0x27), as an element loop over
+-- vl at the vtype SEW, honouring vstart and the v0.t mask (ADR-0012). The two
+-- floating-point operand categories and every unimplemented funct6 raise a
+-- loud error so an out-of-scope fixture fails visibly, mirroring the scalar
+-- decoder's style.
+function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
+  local csr, x = self.csr, self.x
+  if band(csr[MSTATUS] or 0, MSTATUS_VS) == 0 then
+    return trap(CAUSE_ILLEGAL, w) -- VS Off (also catches scalar FP loads/stores)
+  end
+  self.v = self.v or M.new(self.mem).v -- additive field for pre-extension saves
+  local v = self.v
+
+  if op == 0x57 and f3 == 7 then -- vsetvli / vsetivli / vsetvl
+    local vt, avl
+    if bits(w, 31, 30) == 3 then -- vsetivli
+      vt, avl = bits(w, 29, 20), rs1
+    elseif bits(w, 31, 25) == 0x40 then -- vsetvl
+      vt = x[rs2]
+    elseif bits(w, 31, 31) == 0 then -- vsetvli
+      vt = bits(w, 30, 20)
+    else
+      return trap(CAUSE_ILLEGAL, w)
+    end
+    if not avl then -- register AVL forms share the x0 conventions
+      if rs1 ~= 0 then
+        avl = x[rs1]
+      elseif rd ~= 0 then
+        avl = 0xFFFFFFFF -- vl = VLMAX
+      else
+        avl = csr[VL] -- keep vl (we take min against the new VLMAX)
+      end
+    end
+    local vlmax = vlmax_of(vt)
+    if not vlmax then
+      csr[VTYPE], csr[VL] = VILL, 0
+      set(rd, 0)
+    else
+      local vl = math.min(avl, vlmax)
+      csr[VTYPE], csr[VL] = vt, vl
+      set(rd, vl)
+    end
+    csr[MSTATUS] = bor(csr[MSTATUS], MSTATUS_VS)
+    return npc
+  end
+
+  if band(csr[VTYPE] or 0, VILL) ~= 0 then
+    return trap(CAUSE_ILLEGAL, w) -- vector instruction under vill
+  end
+  local sew = lsh(8, band(rsh(csr[VTYPE], 3), 7))
+  local vl, vstart = csr[VL] or 0, csr[VSTART] or 0
+  local vm = bits(w, 25, 25)
+
+  if op == 0x57 then -- OP-V arithmetic
+    local f6 = bits(w, 31, 26)
+    if f3 == 0 and f6 == 0x00 then -- vadd.vv
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          velt_set(v, rd, sew, e, velt_get(v, rs2, sew, e) + velt_get(v, rs1, sew, e))
+        end
+      end
+    elseif f3 == 3 and f6 == 0x17 and vm == 1 and rs2 == 0 then -- vmv.v.i
+      local imm = sext(rs1, 5)
+      for e = vstart, vl - 1 do
+        velt_set(v, rd, sew, e, imm)
+      end
+    else
+      error(string.format("unimplemented vector instruction funct6=0x%02x funct3=%d", f6, f3))
+    end
+  else -- unit-stride loads (0x07) / stores (0x27)
+    local eew = ({ [0] = 8, [5] = 16, [6] = 32 })[f3]
+    if not eew or bits(w, 31, 26) ~= 0 or rs2 ~= 0 then
+      error(string.format("unimplemented vector memory form 0x%08x", w))
+    end
+    local base = x[rs1]
+    for e = vstart, vl - 1 do
+      if vm == 1 or mask_bit(v, e) == 1 then
+        local addr = u32(base + e * (eew / 8))
+        if op == 0x07 then
+          local val
+          if eew == 8 then
+            val = self.mem:rb(addr)
+          elseif eew == 16 then
+            val = self.mem:r16(addr)
+          else
+            val = self.mem:r32(addr)
+          end
+          velt_set(v, rd, eew, e, val)
+        else
+          local val = velt_get(v, rd, eew, e)
+          if eew == 8 then
+            self.mem:wb(addr, val)
+          elseif eew == 16 then
+            self.mem:w16(addr, val)
+          else
+            self:store32(addr, val)
+          end
+        end
+      end
+    end
+  end
+
+  csr[VSTART] = 0
+  csr[MSTATUS] = bor(csr[MSTATUS], MSTATUS_VS) -- VS = Dirty
+  return npc
 end
 
 function M:run(opts)

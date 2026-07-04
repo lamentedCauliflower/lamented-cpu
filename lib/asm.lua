@@ -116,7 +116,54 @@ local CSR = {
   marchid = 0xF12,
   mimpid = 0xF13,
   mhartid = 0xF14,
+  -- Zve32x (ADR-0012)
+  vstart = 0x008,
+  vxsat = 0x009,
+  vxrm = 0x00A,
+  vcsr = 0x00F,
+  vl = 0xC20,
+  vtype = 0xC21,
+  vlenb = 0xC22,
 }
+
+-- vector registers v0..v31 (a class of their own; never valid where an x
+-- register is expected, so they live outside REG)
+local function vreg(t)
+  local n = tonumber(t:gsub("%s", ""):match("^v(%d+)$") or "")
+  assert(n and n <= 31, "bad vector register '" .. tostring(t) .. "'")
+  return n
+end
+
+-- vtype operand list (e32, m2, ta, ma) -> vtype/zimm bits. Order-free; the
+-- policy tokens default to tu,mu when omitted (gas accepts that form).
+local VTYPE_TOK = {
+  e8 = { sew = 0 },
+  e16 = { sew = 1 },
+  e32 = { sew = 2 },
+  e64 = { sew = 3 }, -- encodable; the Hart flags vill (ELEN=32)
+  m1 = { lmul = 0 },
+  m2 = { lmul = 1 },
+  m4 = { lmul = 2 },
+  m8 = { lmul = 3 },
+  mf8 = { lmul = 5 },
+  mf4 = { lmul = 6 },
+  mf2 = { lmul = 7 },
+  tu = { ta = 0 },
+  ta = { ta = 0x40 },
+  mu = { ma = 0 },
+  ma = { ma = 0x80 },
+}
+local function vtypebits(toks)
+  local sew, lmul, ta, ma = 0, 0, 0, 0
+  for _, t in ipairs(toks) do
+    local d = VTYPE_TOK[t:gsub("%s", "")] or error("bad vtype operand '" .. tostring(t) .. "'")
+    sew = d.sew and d.sew or sew
+    lmul = d.lmul and d.lmul or lmul
+    ta = d.ta and d.ta or ta
+    ma = d.ma and d.ma or ma
+  end
+  return lmul + lsh(sew, 3) + ta + ma
+end
 
 local function reg(t)
   local r = REG[(t:gsub("%s", ""))]
@@ -301,6 +348,16 @@ local function eB(op, f3, rs1, rs2, off)
       + lsh(bits(off, 12, 12), 31)
   )
 end
+-- OP-V (0x57): funct6 | vm | vs2 | vs1/rs1/imm5 | funct3 | vd/rd
+local function eV(f6, vm, vs2, vs1, f3, vd)
+  return u32(
+    0x57 + lsh(vd, 7) + lsh(f3, 12) + lsh(vs1, 15) + lsh(vs2, 20) + lsh(vm, 25) + lsh(f6, 26)
+  )
+end
+-- unit-stride vector load (0x07) / store (0x27): nf=0, mew=0, mop=0, lumop=0
+local function eVmem(op, width, vm, rs1, vreg3)
+  return u32(op + lsh(vreg3, 7) + lsh(width, 12) + lsh(rs1, 15) + lsh(vm, 25))
+end
 local function eJ(op, rd, off)
   off = u32(off)
   return u32(
@@ -422,6 +479,20 @@ function M.assemble(src, resolver)
   local function parse_mem(tok) -- "imm(reg)" -> imm, regnum
     local imm, r = tok:match("^(.-)%(%s*([%w]+)%s*%)$")
     return (imm == "" and 0 or evalexpr(imm, sym, weak)), reg(r)
+  end
+
+  -- OP-V arithmetic, table-driven (ADR-0012: families grow by table rows, not
+  -- new branches). funct3 selects the operand category: OPIVV=0, OPMVV=2,
+  -- OPIVI=3, OPIVX=4, OPMVX=6. Encoded operand order is vd, vs2, vs1/rs1/imm.
+  local VARITH = {
+    ["vadd.vv"] = { f6 = 0x00, f3 = 0 },
+  }
+  -- vmv.v.* is vmerge's encoding with vm=1 and vs2=0
+  local VMV = { ["vmv.v.i"] = 3, ["vmv.v.x"] = 4 }
+  local VMEM = {} -- "vle8.v" -> {op, width}; vse mirrors with the store opcode
+  for w, f3 in pairs({ [8] = 0, [16] = 5, [32] = 6 }) do
+    VMEM["vle" .. w .. ".v"] = { 0x07, f3 }
+    VMEM["vse" .. w .. ".v"] = { 0x27, f3 }
   end
 
   local ALU = {
@@ -661,6 +732,54 @@ function M.assemble(src, resolver)
       emit(function()
         return 0xC0001073
       end)
+    elseif m == "vsetvli" then
+      local rd, rs1 = reg(o[1]), reg(o[2])
+      local z = vtypebits({ table.unpack(o, 3) })
+      emit(function()
+        return eI(0x57, 7, rd, rs1, z)
+      end)
+    elseif m == "vsetivli" then
+      local rd = reg(o[1])
+      local uimm = band(evalexpr(o[2], sym, weak), 0x1F)
+      local z = vtypebits({ table.unpack(o, 3) })
+      emit(function()
+        return eI(0x57, 7, rd, uimm, 0xC00 + z)
+      end)
+    elseif m == "vsetvl" then
+      local rd, rs1, rs2 = reg(o[1]), reg(o[2]), reg(o[3])
+      emit(function()
+        return eR(0x57, 7, 0x40, rd, rs1, rs2)
+      end)
+    elseif VMEM[m] then
+      local op, width = VMEM[m][1], VMEM[m][2]
+      local vd = vreg(o[1])
+      local _, rs1 = parse_mem(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      emit(function()
+        return eVmem(op, width, vm, rs1, vd)
+      end)
+    elseif VARITH[m] then
+      local f6, f3 = VARITH[m].f6, VARITH[m].f3
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      local vm = o[4] == "v0.t" and 0 or 1
+      local vs1 -- register number or masked immediate, per operand category
+      if f3 == 3 then
+        vs1 = band(evalexpr(o[3], sym, weak), 0x1F)
+      elseif f3 == 4 or f3 == 6 then
+        vs1 = reg(o[3])
+      else
+        vs1 = vreg(o[3])
+      end
+      emit(function()
+        return eV(f6, vm, vs2, vs1, f3, vd)
+      end)
+    elseif VMV[m] then
+      local f3 = VMV[m]
+      local vd = vreg(o[1])
+      local vs1 = f3 == 3 and band(evalexpr(o[2], sym, weak), 0x1F) or reg(o[2])
+      emit(function()
+        return eV(0x17, 1, 0, vs1, f3, vd)
+      end)
     else
       error("unsupported instruction '" .. m .. "'")
     end
@@ -694,12 +813,24 @@ function M.assemble(src, resolver)
         end)
       end
       lc = target
-    elseif d == ".dword" or d == ".word" or d == ".half" or d == ".byte" then
-      local n = ({ [".dword"] = 8, [".word"] = 4, [".half"] = 2, [".byte"] = 1 })[d]
+    elseif d == ".dword" or d == ".quad" or d == ".word" or d == ".half" or d == ".byte" then
+      local n = ({ [".dword"] = 8, [".quad"] = 8, [".word"] = 4, [".half"] = 2, [".byte"] = 1 })[d]
       for e in (rest .. ","):gmatch("%s*(.-)%s*,") do -- comma-separated values
-        emit_data(n, function(s, wk)
-          return evalexpr(e, s, wk)
-        end)
+        -- 8-byte data: a plain hex literal wider than 32 bits keeps its real
+        -- high word (riscv-vector-tests test data is .quad-packed); computed
+        -- expressions stay u32 with a zero high word, which is all the
+        -- riscv-tests fixtures ever put there.
+        local hex = n == 8 and e:match("^0[xX](%x+)$")
+        if hex and #hex > 8 then
+          local lo, hi = tonumber(hex:sub(-8), 16), tonumber(hex:sub(1, -9), 16)
+          emit_data(n, function()
+            return lo, hi
+          end)
+        else
+          emit_data(n, function(s, wk)
+            return evalexpr(e, s, wk)
+          end)
+        end
       end
     elseif d == ".fill" then
       -- .fill repeat, size, value
@@ -804,9 +935,10 @@ function M.assemble(src, resolver)
   end
   local bytes = {}
   for _, d in ipairs(data) do
-    local v = u32(d.gen(sym, weak))
+    local lo, hi = d.gen(sym, weak)
+    lo, hi = u32(lo), u32(hi or 0)
     for i = 0, d.n - 1 do
-      bytes[d.addr + i] = i < 4 and band(rsh(v, i * 8), 0xFF) or 0
+      bytes[d.addr + i] = band(rsh(i < 4 and lo or hi, (i % 4) * 8), 0xFF)
     end
   end
   return { words = words, bytes = bytes, symbols = sym, entry = RESET, lines = lines }
