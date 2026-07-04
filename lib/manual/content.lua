@@ -736,6 +736,500 @@ local examples = {
   },
 }
 
+-- Vector extension chapter (#46): Zve32x, one chapter per extension. Every
+-- accepted vector mnemonic gets a row with an assemblable example for the
+-- coverage gate; rows are generated per suffix so the source stays sublinear
+-- in the ~240 mnemonics. The open-ended memory families (segment and
+-- whole-register forms) are documented as <n>/<eew> pattern rows, each still
+-- carrying one concrete assemblable example.
+local VSFX = {
+  vv = { "vd, vs2, vs1", "v1, v2, v3" },
+  vx = { "vd, vs2, rs1", "v1, v2, a0" },
+  vi = { "vd, vs2, imm", "v1, v2, 5" },
+  vvm = { "vd, vs2, vs1, v0", "v1, v2, v3, v0" },
+  vxm = { "vd, vs2, rs1, v0", "v1, v2, a0, v0" },
+  vim = { "vd, vs2, imm, v0", "v1, v2, 5, v0" },
+  wv = { "vd, vs2w, vs1", "v2, v4, v3" },
+  wx = { "vd, vs2w, rs1", "v2, v4, a0" },
+  wi = { "vd, vs2w, uimm", "v2, v4, 5" },
+  vs = { "vd, vs2, vs1", "v1, v2, v3" },
+  mm = { "vd, vs2, vs1", "v1, v2, v3" },
+  -- the multiply-accumulates put the multiplier first
+  mv = { "vd, vs1, vs2", "v1, v2, v3" },
+  mx = { "vd, rs1, vs2", "v1, a0, v2" },
+}
+local function vr(m, o, s, ex)
+  return { mnemonic = m, operands = o, semantics = s, kind = "real", ex = ex }
+end
+-- one row per suffix in `sfxs` (space-separated), sharing one semantics text
+local function vf(base, sfxs, sem)
+  local out = {}
+  for s in sfxs:gmatch("%S+") do
+    local mm = base .. "." .. (s == "mv" and "vv" or s == "mx" and "vx" or s)
+    local sh = VSFX[s]
+    out[#out + 1] = vr(mm, sh[1], sem, mm .. " " .. sh[2])
+  end
+  return out
+end
+local function vcat(...)
+  local out = {}
+  for _, list in ipairs({ ... }) do
+    for _, row in ipairs(list) do
+      out[#out + 1] = row
+    end
+  end
+  return out
+end
+
+local VCONFIG = {
+  vr(
+    "vsetvli",
+    "rd, rs1, e<sew>, m<lmul>, t<a|u>, m<a|u>",
+    "set vtype from the operand list and vl = min(rs1, VLMAX); rd = vl",
+    "vsetvli t0, a0, e32, m1, ta, ma"
+  ),
+  vr(
+    "vsetivli",
+    "rd, uimm, e<sew>, m<lmul>, ...",
+    "vsetvli with a 5-bit immediate AVL",
+    "vsetivli t0, 4, e8, m2, ta, ma"
+  ),
+  vr(
+    "vsetvl",
+    "rd, rs1, rs2",
+    "set vtype = rs2 (a saved vtype word) and vl from rs1",
+    "vsetvl t0, a0, a1"
+  ),
+}
+
+local VMEM = vcat({
+  vr(
+    "vle<eew>.v",
+    "vd, (rs1) [, v0.t]",
+    "unit-stride load at element width 8, 16, or 32",
+    "vle32.v v1, (a0)"
+  ),
+  vr("vse<eew>.v", "vs3, (rs1) [, v0.t]", "unit-stride store", "vse32.v v1, (a0)"),
+  vr(
+    "vle<eew>ff.v",
+    "vd, (rs1) [, v0.t]",
+    "fault-only-first load: a fault past element 0 truncates vl instead of trapping",
+    "vle8ff.v v1, (a0)"
+  ),
+  vr("vlm.v", "vd, (rs1)", "mask load: ceil(vl/8) bytes, always unmasked", "vlm.v v0, (a0)"),
+  vr("vsm.v", "vs3, (rs1)", "mask store", "vsm.v v0, (a0)"),
+  vr(
+    "vlse<eew>.v",
+    "vd, (rs1), rs2 [, v0.t]",
+    "strided load: element e at rs1 + e*rs2",
+    "vlse32.v v1, (a0), a1"
+  ),
+  vr("vsse<eew>.v", "vs3, (rs1), rs2 [, v0.t]", "strided store", "vsse32.v v1, (a0), a1"),
+  vr(
+    "vluxei<eew>.v",
+    "vd, (rs1), vs2 [, v0.t]",
+    "indexed (unordered) load: element e at rs1 + vs2[e]; the index EEW is the mnemonic's, data moves at SEW",
+    "vluxei16.v v1, (a0), v2"
+  ),
+  vr(
+    "vloxei<eew>.v",
+    "vd, (rs1), vs2 [, v0.t]",
+    "indexed (ordered) load",
+    "vloxei16.v v1, (a0), v2"
+  ),
+  vr(
+    "vsuxei<eew>.v",
+    "vs3, (rs1), vs2 [, v0.t]",
+    "indexed (unordered) store",
+    "vsuxei16.v v1, (a0), v2"
+  ),
+  vr(
+    "vsoxei<eew>.v",
+    "vs3, (rs1), vs2 [, v0.t]",
+    "indexed (ordered) store",
+    "vsoxei16.v v1, (a0), v2"
+  ),
+  vr(
+    "vl<n>re<eew>.v",
+    "vd, (rs1)",
+    "whole-register load of n = 1/2/4/8 registers, vl-independent",
+    "vl2re32.v v2, (a0)"
+  ),
+  vr("vs<n>r.v", "vs3, (rs1)", "whole-register store of n registers", "vs2r.v v2, (a0)"),
+  vr(
+    "vlseg<n>e<eew>.v",
+    "vd, (rs1) [, v0.t]",
+    "unit-stride segment load: de-interleaves n fields into n register groups",
+    "vlseg3e16.v v4, (a0)"
+  ),
+  vr(
+    "vlseg<n>e<eew>ff.v",
+    "vd, (rs1) [, v0.t]",
+    "fault-only-first segment load",
+    "vlseg3e16ff.v v4, (a0)"
+  ),
+  vr(
+    "vsseg<n>e<eew>.v",
+    "vs3, (rs1) [, v0.t]",
+    "unit-stride segment store: interleaves n register groups",
+    "vsseg3e16.v v4, (a0)"
+  ),
+  vr(
+    "vlsseg<n>e<eew>.v",
+    "vd, (rs1), rs2 [, v0.t]",
+    "strided segment load",
+    "vlsseg2e32.v v4, (a0), a1"
+  ),
+  vr(
+    "vssseg<n>e<eew>.v",
+    "vs3, (rs1), rs2 [, v0.t]",
+    "strided segment store",
+    "vssseg2e32.v v4, (a0), a1"
+  ),
+  vr(
+    "vluxseg<n>ei<eew>.v",
+    "vd, (rs1), vs2 [, v0.t]",
+    "indexed (unordered) segment load",
+    "vluxseg2ei16.v v4, (a0), v2"
+  ),
+  vr(
+    "vloxseg<n>ei<eew>.v",
+    "vd, (rs1), vs2 [, v0.t]",
+    "indexed (ordered) segment load",
+    "vloxseg2ei16.v v4, (a0), v2"
+  ),
+  vr(
+    "vsuxseg<n>ei<eew>.v",
+    "vs3, (rs1), vs2 [, v0.t]",
+    "indexed (unordered) segment store",
+    "vsuxseg2ei16.v v4, (a0), v2"
+  ),
+  vr(
+    "vsoxseg<n>ei<eew>.v",
+    "vs3, (rs1), vs2 [, v0.t]",
+    "indexed (ordered) segment store",
+    "vsoxseg2ei16.v v4, (a0), v2"
+  ),
+})
+
+local VARITH = vcat(
+  vf("vadd", "vv vx vi", "vd = vs2 + operand"),
+  vf("vsub", "vv vx", "vd = vs2 - operand"),
+  vf("vrsub", "vx vi", "vd = operand - vs2"),
+  vf("vand", "vv vx vi", "bitwise and"),
+  vf("vor", "vv vx vi", "bitwise or"),
+  vf("vxor", "vv vx vi", "bitwise xor"),
+  vf("vsll", "vv vx vi", "shift left; the shift uses the low lg2(SEW) bits"),
+  vf("vsrl", "vv vx vi", "shift right logical"),
+  vf("vsra", "vv vx vi", "shift right arithmetic"),
+  vf("vminu", "vv vx", "unsigned minimum"),
+  vf("vmin", "vv vx", "signed minimum"),
+  vf("vmaxu", "vv vx", "unsigned maximum"),
+  vf("vmax", "vv vx", "signed maximum"),
+  {
+    vr("vzext.vf2", "vd, vs2 [, v0.t]", "zero-extend SEW/2 source elements", "vzext.vf2 v1, v2"),
+    vr("vsext.vf2", "vd, vs2 [, v0.t]", "sign-extend SEW/2 source elements", "vsext.vf2 v1, v2"),
+    vr("vzext.vf4", "vd, vs2 [, v0.t]", "zero-extend SEW/4 source elements", "vzext.vf4 v1, v2"),
+    vr("vsext.vf4", "vd, vs2 [, v0.t]", "sign-extend SEW/4 source elements", "vsext.vf4 v1, v2"),
+  },
+  vf("vadc", "vvm vxm vim", "vd = vs2 + operand + v0 carry-in (always unmasked)"),
+  vf("vmadc", "vv vx vi vvm vxm vim", "carry-out of the add into mask register vd"),
+  vf("vsbc", "vvm vxm", "vd = vs2 - operand - v0 borrow-in"),
+  vf("vmsbc", "vv vx vvm vxm", "borrow-out of the subtract into mask register vd"),
+  vf("vmerge", "vvm vxm vim", "vd[e] = v0[e] ? operand : vs2[e]"),
+  {
+    vr("vmv.v.v", "vd, vs1", "copy a vector", "vmv.v.v v1, v2"),
+    vr("vmv.v.x", "vd, rs1", "splat a scalar", "vmv.v.x v1, a0"),
+    vr("vmv.v.i", "vd, imm", "splat an immediate", "vmv.v.i v1, 5"),
+  }
+)
+
+local VCMPS = vcat(
+  vf("vmseq", "vv vx vi", "mask bit = (vs2 == operand)"),
+  vf("vmsne", "vv vx vi", "mask bit = (vs2 != operand)"),
+  vf("vmsltu", "vv vx", "mask bit = (vs2 < operand), unsigned"),
+  vf("vmslt", "vv vx", "mask bit = (vs2 < operand), signed"),
+  vf("vmsleu", "vv vx vi", "mask bit = (vs2 <= operand), unsigned"),
+  vf("vmsle", "vv vx vi", "mask bit = (vs2 <= operand), signed"),
+  vf("vmsgtu", "vx vi", "mask bit = (vs2 > operand), unsigned"),
+  vf("vmsgt", "vx vi", "mask bit = (vs2 > operand), signed"),
+  {
+    {
+      mnemonic = "vmsgt.vv",
+      operands = "vd, vs1, vs2",
+      semantics = "pseudo: vmslt.vv with the sources swapped",
+      kind = "pseudo",
+      ex = "vmsgt.vv v1, v2, v3",
+    },
+    {
+      mnemonic = "vmsgtu.vv",
+      operands = "vd, vs1, vs2",
+      semantics = "pseudo: vmsltu.vv with the sources swapped",
+      kind = "pseudo",
+      ex = "vmsgtu.vv v1, v2, v3",
+    },
+  }
+)
+
+local VMULDIV = vcat(
+  vf("vmul", "vv vx", "low half of the product"),
+  vf("vmulh", "vv vx", "high half, signed x signed"),
+  vf("vmulhu", "vv vx", "high half, unsigned x unsigned"),
+  vf("vmulhsu", "vv vx", "high half, signed vs2 x unsigned operand"),
+  vf("vdivu", "vv vx", "unsigned divide; /0 gives all-ones"),
+  vf("vdiv", "vv vx", "signed divide; /0 gives -1, overflow wraps"),
+  vf("vremu", "vv vx", "unsigned remainder; %0 gives the dividend"),
+  vf("vrem", "vv vx", "signed remainder"),
+  vf("vmacc", "mv mx", "vd += vs1 * vs2"),
+  vf("vnmsac", "mv mx", "vd -= vs1 * vs2"),
+  vf("vmadd", "mv mx", "vd = vs1 * vd + vs2"),
+  vf("vnmsub", "mv mx", "vd = -(vs1 * vd) + vs2")
+)
+
+local VWIDE = vcat(
+  vf(
+    "vwaddu",
+    "vv vx wv wx",
+    "widening add, unsigned (destination at 2*SEW; .w forms read vs2 already wide)"
+  ),
+  vf("vwadd", "vv vx wv wx", "widening add, signed"),
+  vf("vwsubu", "vv vx wv wx", "widening subtract, unsigned"),
+  vf("vwsub", "vv vx wv wx", "widening subtract, signed"),
+  vf("vwmulu", "vv vx", "widening multiply, unsigned"),
+  vf("vwmulsu", "vv vx", "widening multiply, signed vs2 x unsigned operand"),
+  vf("vwmul", "vv vx", "widening multiply, signed"),
+  vf("vwmaccu", "mv mx", "widening vd += vs1 * vs2, unsigned"),
+  vf("vwmacc", "mv mx", "widening MAC, signed"),
+  vf("vwmaccsu", "mv mx", "widening MAC, signed vs1 x unsigned vs2"),
+  {
+    vr(
+      "vwmaccus.vx",
+      "vd, rs1, vs2",
+      "widening MAC, unsigned rs1 x signed vs2",
+      "vwmaccus.vx v1, a0, v2"
+    ),
+  }
+)
+
+local VFIXED = vcat(
+  vf("vsaddu", "vv vx vi", "saturating add, unsigned (clamps and sets vxsat)"),
+  vf("vsadd", "vv vx vi", "saturating add, signed"),
+  vf("vssubu", "vv vx", "saturating subtract, unsigned (clamps at 0)"),
+  vf("vssub", "vv vx", "saturating subtract, signed"),
+  vf("vaaddu", "vv vx", "averaging add, unsigned: (vs2 + operand) >> 1 with vxrm rounding"),
+  vf("vaadd", "vv vx", "averaging add, signed"),
+  vf("vasubu", "vv vx", "averaging subtract, unsigned"),
+  vf("vasub", "vv vx", "averaging subtract, signed"),
+  vf("vsmul", "vv vx", "fractional multiply: (vs2 * operand) >> (SEW-1), rounded, saturating"),
+  vf("vssrl", "vv vx vi", "scaling shift right logical, rounded per vxrm"),
+  vf("vssra", "vv vx vi", "scaling shift right arithmetic, rounded"),
+  vf("vnsrl", "wv wx wi", "narrowing shift right logical: vs2 at 2*SEW, result at SEW"),
+  vf("vnsra", "wv wx wi", "narrowing shift right arithmetic"),
+  vf("vnclipu", "wv wx wi", "narrowing clip, unsigned: round per vxrm, clamp to SEW, set vxsat"),
+  vf("vnclip", "wv wx wi", "narrowing clip, signed")
+)
+
+local VRED = vcat(
+  vf("vredsum", "vs", "vd[0] = sum(vs1[0], active vs2 elements)"),
+  vf("vredand", "vs", "and-reduction"),
+  vf("vredor", "vs", "or-reduction"),
+  vf("vredxor", "vs", "xor-reduction"),
+  vf("vredminu", "vs", "unsigned-min reduction"),
+  vf("vredmin", "vs", "signed-min reduction"),
+  vf("vredmaxu", "vs", "unsigned-max reduction"),
+  vf("vredmax", "vs", "signed-max reduction"),
+  vf("vwredsumu", "vs", "widening sum at 2*SEW, unsigned elements"),
+  vf("vwredsum", "vs", "widening sum at 2*SEW, sign-extended elements")
+)
+
+local VMASK = vcat(
+  vf("vmand", "mm", "mask and"),
+  vf("vmnand", "mm", "mask nand"),
+  vf("vmandn", "mm", "vs2 and not vs1"),
+  vf("vmxor", "mm", "mask xor"),
+  vf("vmor", "mm", "mask or"),
+  vf("vmnor", "mm", "mask nor"),
+  vf("vmorn", "mm", "vs2 or not vs1"),
+  vf("vmxnor", "mm", "mask xnor"),
+  {
+    vr(
+      "vcpop.m",
+      "rd, vs2 [, v0.t]",
+      "count the set (active) mask bits into x[rd]",
+      "vcpop.m a0, v2"
+    ),
+    vr("vfirst.m", "rd, vs2 [, v0.t]", "index of the first set mask bit, or -1", "vfirst.m a0, v2"),
+    vr(
+      "vmsbf.m",
+      "vd, vs2 [, v0.t]",
+      "set bits strictly before the first set bit",
+      "vmsbf.m v1, v2"
+    ),
+    vr("vmsif.m", "vd, vs2 [, v0.t]", "set bits up to and including the first", "vmsif.m v1, v2"),
+    vr("vmsof.m", "vd, vs2 [, v0.t]", "set only the first set bit", "vmsof.m v1, v2"),
+    vr("viota.m", "vd, vs2 [, v0.t]", "prefix count of set bits, written at SEW", "viota.m v1, v2"),
+    vr("vid.v", "vd [, v0.t]", "element indices 0, 1, 2, ...", "vid.v v1"),
+  }
+)
+
+local VPERM = vcat(
+  {
+    vr("vmv.x.s", "rd, vs2", "x[rd] = element 0, sign-extended", "vmv.x.s a0, v2"),
+    vr("vmv.s.x", "vd, rs1", "element 0 of vd = rs1 (tail untouched)", "vmv.s.x v1, a0"),
+  },
+  vf("vslideup", "vx vi", "vd[e + offset] = vs2[e]; elements below the offset are untouched"),
+  vf("vslidedown", "vx vi", "vd[e] = vs2[e + offset], 0 past VLMAX"),
+  {
+    vr(
+      "vslide1up.vx",
+      "vd, vs2, rs1 [, v0.t]",
+      "slide up one; rs1 enters at element 0",
+      "vslide1up.vx v1, v2, a0"
+    ),
+    vr(
+      "vslide1down.vx",
+      "vd, vs2, rs1 [, v0.t]",
+      "slide down one; rs1 enters at element vl-1",
+      "vslide1down.vx v1, v2, a0"
+    ),
+  },
+  vf("vrgather", "vv vx vi", "vd[e] = vs2[index]; out-of-range indices read 0"),
+  {
+    vr(
+      "vrgatherei16.vv",
+      "vd, vs2, vs1 [, v0.t]",
+      "gather with 16-bit indices regardless of SEW",
+      "vrgatherei16.vv v1, v2, v4"
+    ),
+    vr(
+      "vcompress.vm",
+      "vd, vs2, vs1",
+      "pack the vs1-selected elements of vs2 densely into vd",
+      "vcompress.vm v1, v2, v0"
+    ),
+    vr(
+      "vmv<n>r.v",
+      "vd, vs2",
+      "copy n = 1/2/4/8 whole registers, vtype-independent",
+      "vmv2r.v v2, v4"
+    ),
+  }
+)
+
+local STRIP_EXAMPLE = [[
+loop:                              # a0 = dst, a1 = src, a2 = words left
+  vsetvli t0, a2, e32, m1, ta, ma  # grant vl = min(a2, 4) at VLEN=128
+  vle32.v v1, (a1)                 # load up to four words
+  vse32.v v1, (a0)                 # store them
+  slli t1, t0, 2                   # bytes consumed = vl * 4
+  add  a1, a1, t1
+  add  a0, a0, t1
+  sub  a2, a2, t0                  # words left -= vl
+  bnez a2, loop                    # until the tail is drained
+]]
+
+local vector_ext = {
+  id = "vector",
+  title = "Vector Extension (Zve32x)",
+  blocks = {
+    h1("Vector Extension (Zve32x)"),
+    p(
+      "The Hart implements Zve32x, the integer-only embedded vector subset of RVV 1.0, "
+        .. "at a fixed VLEN of 128 bits. A vector register holds sixteen 8-bit, eight "
+        .. "16-bit, or four 32-bit elements; one vector instruction processes them all in "
+        .. "a single tick, so bulk work over circuit data runs an order of magnitude "
+        .. "faster than a scalar loop. Everything below is the complete accepted set — "
+        .. "portable RVV idioms from tutorials and real hardware run unchanged."
+    ),
+    h2("Configuration"),
+    p(
+      "vsetvli picks the element width (e8/e16/e32), the register-group length LMUL "
+        .. "(m1..m8 or the fractional mf2/mf4/mf8), the tail and mask policies (ta/tu, "
+        .. "ma/mu), and grants vl = min(requested, VLMAX). VLMAX = VLEN * LMUL / SEW — "
+        .. "16 bytes of elements per register in the group. The strip-mining idiom asks "
+        .. "for everything and takes what it gets:"
+    ),
+    code(STRIP_EXAMPLE),
+    rows(INSN_COLS, VCONFIG),
+    h2("Vector CSRs"),
+    tbl({ "CSR", "Name", "Role" }, {
+      {
+        "0x008",
+        "vstart",
+        "First element the next vector instruction executes (reset to 0 after each)",
+      },
+      { "0x009", "vxsat", "Sticky fixed-point saturation flag" },
+      { "0x00A", "vxrm", "Fixed-point rounding mode: 0 rnu, 1 rne, 2 rdn, 3 rod" },
+      { "0x00F", "vcsr", "vxrm and vxsat packed as vxrm[1:0]<<1 | vxsat" },
+      { "0xC20", "vl", "Elements the current configuration operates on (read-only)" },
+      { "0xC21", "vtype", "SEW / LMUL / policy word set by vset* (read-only)" },
+      { "0xC22", "vlenb", "VLEN in bytes: always 16 (read-only)" },
+    }),
+    h2("Memory"),
+    p(
+      "Loads and stores move elements between vector registers and memory. <eew> in a "
+        .. "mnemonic is the element width in bits (8, 16, or 32); <n> is the whole-register "
+        .. "or segment count (1-8; n * LMUL stays within the file). A trailing `, v0.t` "
+        .. "makes any maskable form skip inactive elements. Segment forms de-interleave "
+        .. "records — vlseg2e32.v splits (id, value) pairs into two registers in one "
+        .. "instruction."
+    ),
+    rows(INSN_COLS, VMEM),
+    h2("Integer arithmetic"),
+    p(
+      "Elementwise over the active elements at the live SEW. The .vv form takes the "
+        .. "second source from vs1, .vx from a scalar register (truncated to SEW), and "
+        .. ".vi from a 5-bit immediate. A trailing `, v0.t` masks any of them."
+    ),
+    rows(INSN_COLS, VARITH),
+    h2("Compares"),
+    p(
+      "Compares write one mask bit per element — feed the result to v0.t or the mask instructions."
+    ),
+    rows(INSN_COLS, VCMPS),
+    h2("Multiply & divide"),
+    rows(INSN_COLS, VMULDIV),
+    h2("Widening"),
+    p(
+      "Widening forms write destination elements at 2*SEW (so e32 sources are reserved "
+        .. "— ELEN is 32). The destination register group must be aligned to 2*LMUL."
+    ),
+    rows(INSN_COLS, VWIDE),
+    h2("Fixed-point"),
+    p(
+      "Saturating forms clamp instead of wrapping and set the sticky vxsat flag. "
+        .. "Averaging, scaling, and clip forms round the shifted-out bits per vxrm: "
+        .. "rnu rounds half up, rne half to even, rdn truncates, rod jams the low bit."
+    ),
+    rows(INSN_COLS, VFIXED),
+    h2("Reductions"),
+    p(
+      "Reductions collapse the active elements of vs2 into element 0 of vd, seeded "
+        .. "from element 0 of vs1. vl = 0 leaves vd untouched."
+    ),
+    rows(INSN_COLS, VRED),
+    h2("Mask instructions"),
+    p(
+      "Masks live one bit per element in any vector register; v0 is the one the "
+        .. "`, v0.t` suffix reads. The logicals operate on the low vl bits."
+    ),
+    rows(INSN_COLS, VMASK),
+    h2("Permutation"),
+    rows(INSN_COLS, VPERM),
+    h2("Circuit I/O interaction"),
+    p(
+      "The controller's data regions — the Query registers, the Input snapshot, and "
+        .. "the Output staging — are ordinary memory to vector code: bulk-filling the "
+        .. "staging with vector stores is the intended fast path. The trigger registers "
+        .. "(Sample and Commit) are the exception: they are rung with scalar stores "
+        .. "only, and any vector element store landing in that 16-byte window raises a "
+        .. "store access-fault instead of a doorbell, so a slip in vector address "
+        .. "arithmetic cannot fire a Sample or Commit you did not intend. Vector loads "
+        .. "never fault."
+    ),
+  },
+}
+
 -- Extensions (#28): append-only placeholder establishing the one-chapter-per-
 -- extension pattern. Nothing here is implemented yet.
 local extensions = {
@@ -772,5 +1266,6 @@ return {
   circuit_io,
   assembler_reference,
   examples,
+  vector_ext,
   extensions,
 }
