@@ -525,6 +525,26 @@ local VFAMILIES = {
   -- #44 stragglers: the vmsgt(u).vv pseudo-instruction forms
   { "vmsgt_vv", 2 },
   { "vmsgtu_vv", 2 },
+  -- #45 permutation: slides
+  { "vslideup_vi", 4 },
+  { "vslideup_vx", 5 },
+  { "vslidedown_vi", 4 },
+  { "vslidedown_vx", 5 },
+  { "vslide1up_vx", 5 },
+  { "vslide1down_vx", 5 },
+  -- #45 permutation: register gathers
+  { "vrgather_vi", 4 },
+  { "vrgather_vv", 2 },
+  { "vrgather_vx", 5 },
+  { "vrgatherei16_vv", 2 },
+  -- #45 permutation: compress, whole-register moves, scalar moves
+  { "vcompress_vm", 1 },
+  { "vmv1r_v", 1 },
+  { "vmv2r_v", 1 },
+  { "vmv4r_v", 1 },
+  { "vmv8r_v", 1 },
+  { "vmv_s_x", 1 },
+  { "vmv_x_s", 1 },
 }
 local VALLOW = {}
 for _, fam in ipairs(VFAMILIES) do

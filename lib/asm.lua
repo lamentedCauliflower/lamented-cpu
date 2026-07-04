@@ -536,6 +536,11 @@ function M.assemble(src, resolver)
     vnsra = 0x2D,
     vnclipu = 0x2E,
     vnclip = 0x2F,
+    -- permutation (#45): slides and gathers
+    vslideup = 0x0E,
+    vslidedown = 0x0F,
+    vrgather = 0x0C,
+    vrgatherei16 = 0x0E,
   }
   local VSUFF = { vv = 0, vx = 4, vi = 3, vvm = 0, vxm = 4, vim = 3, wv = 0, wx = 4, wi = 3 }
   -- vmv.v.* is vmerge's encoding with vm=1 and vs2=0
@@ -629,6 +634,8 @@ function M.assemble(src, resolver)
     ["vwmaccus.vx"] = { 0x3E, 6, true },
     ["vwmaccsu.vv"] = { 0x3F, 2, true },
     ["vwmaccsu.vx"] = { 0x3F, 6, true },
+    ["vslide1up.vx"] = { 0x0E, 6 },
+    ["vslide1down.vx"] = { 0x0F, 6 },
   }
 
   -- VMUNARY0 (OPMVV funct6=0x14): vs1 field encodes the operation
@@ -1057,6 +1064,24 @@ function M.assemble(src, resolver)
       local vd, rs1 = vreg(o[1]), reg(o[2])
       emit(function()
         return eV(0x10, 1, 0, rs1, 6, vd)
+      end)
+    elseif m == "vmv.x.s" then
+      -- VWXUNARY0 code 0: x[rd] = element 0 of vs2
+      local rd, vs2 = reg(o[1]), vreg(o[2])
+      emit(function()
+        return eV(0x10, 1, vs2, 0, 2, rd)
+      end)
+    elseif m == "vcompress.vm" then
+      local vd, vs2, vs1 = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      emit(function()
+        return eV(0x17, 1, vs2, vs1, 2, vd)
+      end)
+    elseif m:match("^vmv[1248]r%.v$") then
+      -- whole-register move: n-1 rides the vs1 field
+      local n = tonumber(m:match("^vmv(%d)r"))
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      emit(function()
+        return eV(0x27, 1, vs2, n - 1, 3, vd)
       end)
     elseif VM6[m] then
       local t = VM6[m]

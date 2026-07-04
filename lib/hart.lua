@@ -861,6 +861,83 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
         end
         velt_set(v, rd, sew, e, val)
       end
+    elseif (opiv and f6 == 0x0C) or (f3 == 0 and f6 == 0x0E) then
+      -- vrgather / vrgatherei16: vd[e] = vs2[index], 0 when the index is out
+      -- of VLMAX range. Indices come from vs1 elements (at SEW, or EEW=16 for
+      -- the ei16 form), a full x[rs1], or the uimm -- never sign-extended.
+      local vlmax = vlmax_of(csr[VTYPE])
+      local ieew = f6 == 0x0E and 16 or sew
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local idx
+          if f3 == 0 then
+            idx = velt_get(v, rs1, ieew, e)
+          elseif f3 == 3 then
+            idx = rs1
+          else
+            idx = x[rs1]
+          end
+          velt_set(v, rd, sew, e, idx < vlmax and velt_get(v, rs2, sew, idx) or 0)
+        end
+      end
+    elseif (f6 == 0x0E or f6 == 0x0F) and (f3 == 3 or f3 == 4 or f3 == 6) then
+      -- slides. vslideup/vslidedown take a uimm or full x[rs1] offset (not
+      -- the usual sign-extended-and-truncated operand); vslide1up/vslide1down
+      -- (OPMVX) insert x[rs1] at the open end. Slidedown reads source
+      -- elements up to VLMAX; beyond that reads 0.
+      local vlmax = vlmax_of(csr[VTYPE])
+      local up = f6 == 0x0E
+      if f3 == 6 then
+        local xval = band(x[rs1], sewmask)
+        for e = vstart, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            local val
+            if up then
+              val = e == 0 and xval or velt_get(v, rs2, sew, e - 1)
+            else
+              val = e == vl - 1 and xval or velt_get(v, rs2, sew, e + 1)
+            end
+            velt_set(v, rd, sew, e, val)
+          end
+        end
+      else
+        local off = f3 == 3 and rs1 or x[rs1]
+        local first = up and math.max(vstart, off) or vstart
+        for e = first, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            local val
+            if up then
+              val = velt_get(v, rs2, sew, e - off)
+            else
+              local s = e + off
+              val = s < vlmax and velt_get(v, rs2, sew, s) or 0
+            end
+            velt_set(v, rd, sew, e, val)
+          end
+        end
+      end
+    elseif f3 == 3 and f6 == 0x27 then
+      -- vmv<n>r.v: copy n whole registers regardless of vl (dispatched ahead
+      -- of VFIX, which owns funct6 0x27 as vsmul for the vv/vx forms)
+      local n = band(rs1, 7) + 1
+      for r = 0, n - 1 do
+        for wi = 1, 4 do
+          v[rd + r][wi] = v[rs2 + r][wi]
+        end
+      end
+    elseif f3 == 2 and f6 == 0x17 then
+      -- vcompress.vm: pack the vs1-selected elements of vs2 densely into vd;
+      -- vstart must be zero
+      if vstart ~= 0 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      local k = 0
+      for e = 0, vl - 1 do
+        if mreg_bit(v, rs1, e) == 1 then
+          velt_set(v, rd, sew, k, velt_get(v, rs2, sew, e))
+          k = k + 1
+        end
+      end
     elseif opiv and VFIX[f6] then
       local f = VFIX[f6]
       local rm = band(csr[VXRM] or 0, 3)
@@ -1031,13 +1108,15 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
       for e = vstart, vl - 1 do
         mask_set_bit(v, rd, e, p(mreg_bit(v, rs2, e), mreg_bit(v, rs1, e)))
       end
-    elseif f3 == 2 and f6 == 0x10 and (rs1 == 0x10 or rs1 == 0x11) then
-      -- VWXUNARY0: vcpop.m counts the set active mask bits of vs2, vfirst.m
-      -- finds the first (or -1); both write x[rd], both require vstart = 0
-      if vstart ~= 0 then
+    elseif f3 == 2 and f6 == 0x10 and (rs1 == 0 or rs1 == 0x10 or rs1 == 0x11) then
+      -- VWXUNARY0: vmv.x.s copies element 0 sign-extended to x[rd] (even at
+      -- vl = 0); vcpop.m counts the set active mask bits of vs2, vfirst.m
+      -- finds the first (or -1); the counts require vstart = 0
+      if rs1 == 0 then
+        set(rd, u32(sxt(velt_get(v, rs2, sew, 0), sew)))
+      elseif vstart ~= 0 then
         return trap(CAUSE_ILLEGAL, w)
-      end
-      if rs1 == 0x10 then
+      elseif rs1 == 0x10 then
         local n = 0
         for e = 0, vl - 1 do
           if (vm == 1 or mask_bit(v, e) == 1) and mreg_bit(v, rs2, e) == 1 then
