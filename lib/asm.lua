@@ -535,6 +535,41 @@ function M.assemble(src, resolver)
     ["vsext.vf2"] = 7,
   }
 
+  -- reductions (.vs): vd[0] = reduce(vs1[0], vs2 elements). The two widening
+  -- sums are OPIVV; the single-width family is OPMVV.
+  local VRED = {
+    vredsum = { 0x00, 2 },
+    vredand = { 0x01, 2 },
+    vredor = { 0x02, 2 },
+    vredxor = { 0x03, 2 },
+    vredminu = { 0x04, 2 },
+    vredmin = { 0x05, 2 },
+    vredmaxu = { 0x06, 2 },
+    vredmax = { 0x07, 2 },
+    vwredsumu = { 0x30, 0 },
+    vwredsum = { 0x31, 0 },
+  }
+
+  -- VMUNARY0 (OPMVV funct6=0x14): vs1 field encodes the operation
+  local VMUN = {
+    ["vmsbf.m"] = 1,
+    ["vmsof.m"] = 2,
+    ["vmsif.m"] = 3,
+    ["viota.m"] = 0x10,
+  }
+
+  -- mask-register logicals (.mm): OPMVV, always unmasked
+  local VMLOG = {
+    vmandn = 0x18,
+    vmand = 0x19,
+    vmor = 0x1A,
+    vmxor = 0x1B,
+    vmorn = 0x1C,
+    vmnand = 0x1D,
+    vmnor = 0x1E,
+    vmxnor = 0x1F,
+  }
+
   -- Vector memory mnemonic -> encoding fields + operand style. Covers every
   -- Zve32x form: unit-stride, fault-only-first, strided, indexed
   -- (ordered/unordered), mask, whole-register, and the seg<n> variants of
@@ -905,6 +940,47 @@ function M.assemble(src, resolver)
       local vm = o[3] == "v0.t" and 0 or 1
       emit(function()
         return eV(0x12, vm, vs2, code, 2, vd)
+      end)
+    elseif VRED[m:match("^(v%w+)%.vs$")] then
+      local r = VRED[m:match("^(v%w+)%.vs$")]
+      local vd, vs2, vs1 = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      local vm = o[4] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(r[1], vm, vs2, vs1, r[2], vd)
+      end)
+    elseif VMLOG[m:match("^(v%w+)%.mm$")] then
+      local f6 = VMLOG[m:match("^(v%w+)%.mm$")]
+      local vd, vs2, vs1 = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      emit(function()
+        return eV(f6, 1, vs2, vs1, 2, vd)
+      end)
+    elseif m == "vcpop.m" or m == "vfirst.m" then
+      -- VWXUNARY0: an x-register destination in the vd field
+      local rd, vs2 = reg(o[1]), vreg(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      local code = m == "vcpop.m" and 0x10 or 0x11
+      emit(function()
+        return eV(0x10, vm, vs2, code, 2, rd)
+      end)
+    elseif m == "vmv.s.x" then
+      -- VRXUNARY0: rs1 rides the vs1 field, vs2 must be 0
+      local vd, rs1 = vreg(o[1]), reg(o[2])
+      emit(function()
+        return eV(0x10, 1, 0, rs1, 6, vd)
+      end)
+    elseif VMUN[m] then
+      -- VMUNARY0: the operation code rides the vs1 field
+      local code = VMUN[m]
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(0x14, vm, vs2, code, 2, vd)
+      end)
+    elseif m == "vid.v" then
+      local vd = vreg(o[1])
+      local vm = o[2] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(0x14, vm, 0, 0x11, 2, vd)
       end)
     else
       error("unsupported instruction '" .. m .. "'")

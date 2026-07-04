@@ -105,9 +105,14 @@ local function velt_set(v, base, eew, e, val)
   reg[wi] = bor(band(reg[wi], bnot(lsh(mask, sh))), lsh(band(val, mask), sh))
 end
 
--- mask bit e is bit e of v0 (mask layout is independent of SEW/LMUL)
+-- bit e of mask register r (mask layout is independent of SEW/LMUL)
+local function mreg_bit(v, r, e)
+  return band(rsh(v[r][math.floor(e / 32) + 1], e % 32), 1)
+end
+
+-- mask bit e is bit e of v0
 local function mask_bit(v, e)
-  return band(rsh(v[0][math.floor(e / 32) + 1], e % 32), 1)
+  return mreg_bit(v, 0, e)
 end
 
 -- write bit e of the mask register vd (mask-producing compares and carry-outs
@@ -170,6 +175,64 @@ local VOPI = {
   [0x29] = function(a, b, s)
     return ash(u32(sxt(a, s)), band(b, s - 1))
   end, -- vsra
+}
+
+-- single-width integer reductions by funct6 (OPMVV): f(accumulator, vs2
+-- element, sew) -> next accumulator; the accumulator is seeded from vs1[0]
+local VRED = {
+  [0x00] = function(a, b)
+    return a + b
+  end, -- vredsum
+  [0x01] = function(a, b)
+    return band(a, b)
+  end, -- vredand
+  [0x02] = function(a, b)
+    return bor(a, b)
+  end, -- vredor
+  [0x03] = function(a, b)
+    return rv.bxor(a, b)
+  end, -- vredxor
+  [0x04] = function(a, b)
+    return math.min(a, b)
+  end, -- vredminu
+  [0x05] = function(a, b, s)
+    return sxt(a, s) < sxt(b, s) and a or b
+  end, -- vredmin
+  [0x06] = function(a, b)
+    return math.max(a, b)
+  end, -- vredmaxu
+  [0x07] = function(a, b, s)
+    return sxt(a, s) > sxt(b, s) and a or b
+  end, -- vredmax
+}
+
+-- mask-register logicals by funct6 (OPMVV, .mm): p(vs2 bit, vs1 bit) with
+-- 0/1 inputs -> boolean result bit
+local VMLOG = {
+  [0x18] = function(a, b)
+    return a == 1 and b == 0
+  end, -- vmandn
+  [0x19] = function(a, b)
+    return a == 1 and b == 1
+  end, -- vmand
+  [0x1A] = function(a, b)
+    return a == 1 or b == 1
+  end, -- vmor
+  [0x1B] = function(a, b)
+    return a ~= b
+  end, -- vmxor
+  [0x1C] = function(a, b)
+    return a == 1 or b == 0
+  end, -- vmorn
+  [0x1D] = function(a, b)
+    return not (a == 1 and b == 1)
+  end, -- vmnand
+  [0x1E] = function(a, b)
+    return not (a == 1 or b == 1)
+  end, -- vmnor
+  [0x1F] = function(a, b)
+    return a == b
+  end, -- vmxnor
 }
 
 -- VXUNARY0 vs1-field codes: { widening factor, signed }
@@ -607,6 +670,124 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
           val = velt_get(v, rs2, sew, e)
         end
         velt_set(v, rd, sew, e, val)
+      end
+    elseif f3 == 2 and VRED[f6] then
+      -- reductions collapse active vs2 elements into vd[0], seeded from
+      -- vs1[0]; vl=0 leaves vd untouched. Nonzero vstart is illegal (spec).
+      if vstart ~= 0 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      if vl > 0 then
+        local f = VRED[f6]
+        local acc = velt_get(v, rs1, sew, 0)
+        for e = 0, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            acc = band(f(acc, velt_get(v, rs2, sew, e), sew), sewmask)
+          end
+        end
+        velt_set(v, rd, sew, 0, acc)
+      end
+    elseif f3 == 0 and (f6 == 0x30 or f6 == 0x31) then
+      -- vwredsumu/vwredsum: sum at 2*SEW into vd[0] seeded from vs1[0] at
+      -- 2*SEW; 2*SEW > ELEN=32 is reserved
+      if vstart ~= 0 or sew * 2 > 32 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      if vl > 0 then
+        local dsew = sew * 2
+        local dmask = 2 ^ dsew - 1
+        local acc = velt_get(v, rs1, dsew, 0)
+        for e = 0, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            local val = velt_get(v, rs2, sew, e)
+            if f6 == 0x31 then
+              val = band(sxt(val, sew), dmask)
+            end
+            acc = band(acc + val, dmask)
+          end
+        end
+        velt_set(v, rd, dsew, 0, acc)
+      end
+    elseif f3 == 2 and VMLOG[f6] then
+      -- mask logicals: unmasked bitwise ops over the low vl mask bits
+      local p = VMLOG[f6]
+      for e = vstart, vl - 1 do
+        mask_set_bit(v, rd, e, p(mreg_bit(v, rs2, e), mreg_bit(v, rs1, e)))
+      end
+    elseif f3 == 2 and f6 == 0x10 and (rs1 == 0x10 or rs1 == 0x11) then
+      -- VWXUNARY0: vcpop.m counts the set active mask bits of vs2, vfirst.m
+      -- finds the first (or -1); both write x[rd], both require vstart = 0
+      if vstart ~= 0 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      if rs1 == 0x10 then
+        local n = 0
+        for e = 0, vl - 1 do
+          if (vm == 1 or mask_bit(v, e) == 1) and mreg_bit(v, rs2, e) == 1 then
+            n = n + 1
+          end
+        end
+        set(rd, n)
+      else
+        local first = -1
+        for e = 0, vl - 1 do
+          if (vm == 1 or mask_bit(v, e) == 1) and mreg_bit(v, rs2, e) == 1 then
+            first = e
+            break
+          end
+        end
+        set(rd, first)
+      end
+    elseif f3 == 6 and f6 == 0x10 and rs2 == 0 then
+      -- VRXUNARY0: vmv.s.x writes x[rs1] at SEW into vd[0]; a no-op (not
+      -- even a tail write) when vstart >= vl
+      if vstart < vl then
+        velt_set(v, rd, sew, 0, band(x[rs1], sewmask))
+      end
+    elseif f3 == 2 and f6 == 0x14 then
+      -- VMUNARY0 by vs1 code: vmsbf/vmsof/vmsif (1/2/3) write mask bits up to
+      -- the first set active bit of vs2, viota (0x10) prefix-counts it into
+      -- SEW elements, vid (0x11) writes element indices. All but vid require
+      -- vstart = 0 (spec).
+      if rs1 == 0x11 then -- vid.v honours vstart like a normal elementwise op
+        for e = vstart, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            velt_set(v, rd, sew, e, e)
+          end
+        end
+      elseif vstart ~= 0 then
+        return trap(CAUSE_ILLEGAL, w)
+      elseif rs1 == 0x10 then -- viota.m: inactive elements neither written nor counted
+        local sum = 0
+        for e = 0, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            velt_set(v, rd, sew, e, sum)
+            if mreg_bit(v, rs2, e) == 1 then
+              sum = sum + 1
+            end
+          end
+        end
+      elseif rs1 >= 1 and rs1 <= 3 then
+        local found = false
+        for e = 0, vl - 1 do
+          if vm == 1 or mask_bit(v, e) == 1 then
+            local b = mreg_bit(v, rs2, e) == 1
+            local out
+            if rs1 == 1 then
+              out = not found and not b -- vmsbf: strictly before the first
+            elseif rs1 == 2 then
+              out = not found and b -- vmsof: only the first
+            else
+              out = not found -- vmsif: up to and including the first
+            end
+            if b then
+              found = true
+            end
+            mask_set_bit(v, rd, e, out)
+          end
+        end
+      else
+        error(string.format("unimplemented VMUNARY0 vs1=0x%02x", rs1))
       end
     elseif f3 == 2 and f6 == 0x12 and VEXTF[rs1] then
       -- VXUNARY0: vzext/vsext.vf2/.vf4 read the source at a narrower EEW

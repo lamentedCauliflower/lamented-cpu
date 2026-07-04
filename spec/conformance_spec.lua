@@ -397,6 +397,34 @@ local VFAMILIES = {
   { "vsuxseg8ei16_v", 1 },
   { "vsuxseg8ei32_v", 1 },
   { "vsuxseg8ei8_v", 2 },
+  -- #43 reductions: single-width integer + widening sums
+  { "vredand_vs", 2 },
+  { "vredmax_vs", 2 },
+  { "vredmaxu_vs", 2 },
+  { "vredmin_vs", 2 },
+  { "vredminu_vs", 2 },
+  { "vredor_vs", 2 },
+  { "vredsum_vs", 2 },
+  { "vredxor_vs", 2 },
+  { "vwredsum_vs", 2 },
+  { "vwredsumu_vs", 2 },
+  -- #43 mask instructions: logicals, population count, find-first-set
+  { "vmand_mm", 1 },
+  { "vmandn_mm", 1 },
+  { "vmnand_mm", 1 },
+  { "vmnor_mm", 1 },
+  { "vmor_mm", 1 },
+  { "vmorn_mm", 1 },
+  { "vmxnor_mm", 1 },
+  { "vmxor_mm", 1 },
+  { "vcpop_m", 1 },
+  { "vfirst_m", 1 },
+  -- #43 mask instructions: set-before/including/only-first, iota, index
+  { "vmsbf_m", 1 },
+  { "vmsif_m", 1 },
+  { "vmsof_m", 1 },
+  { "viota_m", 2 },
+  { "vid_v", 1 },
 }
 local VALLOW = {}
 for _, fam in ipairs(VFAMILIES) do
