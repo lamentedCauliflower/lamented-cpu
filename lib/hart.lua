@@ -27,6 +27,7 @@ local VL, VTYPE, VLENB = 0xC20, 0xC21, 0xC22
 local VLEN = 128
 local MSTATUS_VS = 0x600 -- bits 10:9; 0 = Off (vector instructions trap)
 local VILL = 0x80000000
+local CAUSE_STORE_ACCESS = 7
 
 -- 32x32 -> 64-bit unsigned product via 16-bit limbs, so every term stays below
 -- 2^34 and is exact in a double. Returns high, low (each unsigned 32-bit).
@@ -484,6 +485,14 @@ local function vlmax_of(vt)
   return math.floor(VLEN * num / (den * sew))
 end
 
+-- Circuit I/O rule (#41): a vector element store landing in the armed
+-- controller's 16-byte trigger-register window is a store access-fault, not a
+-- doorbell -- a slip in vector address arithmetic must not fire Sample or
+-- Commit. io_base is nil under conformance, so this is reachable in-game only.
+function M:vstore_faults(addr, len)
+  return self.io_base and addr + len > self.io_base and addr < self.io_base + 0x10
+end
+
 -- Zve32x decode/execute: configuration (op 0x57 funct3=7), OP-V arithmetic
 -- (0x57), unit-stride loads (0x07) and stores (0x27), as an element loop over
 -- vl at the vtype SEW, honouring vstart and the v0.t mask (ADR-0012). The two
@@ -635,6 +644,9 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
           local addr = u32(base + r * 16 + wi * 4)
           if load then
             v[rd + r][wi + 1] = self.mem:r32(addr)
+          elseif self:vstore_faults(addr, 4) then
+            csr[VSTART] = r * 16 + wi * 4 -- element index at EEW=8
+            return trap(CAUSE_STORE_ACCESS, addr)
           else
             self:store32(addr, v[rd + r][wi + 1])
           end
@@ -647,6 +659,9 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
         local addr = u32(base + e)
         if load then
           velt_set(v, rd, 8, e, self.mem:rb(addr))
+        elseif self:vstore_faults(addr, 1) then
+          csr[VSTART] = e
+          return trap(CAUSE_STORE_ACCESS, addr)
         else
           self.mem:wb(addr, velt_get(v, rd, 8, e))
         end
@@ -698,6 +713,9 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
                 val = self.mem:r32(addr)
               end
               velt_set(v, vr, deew, e, val)
+            elseif self:vstore_faults(addr, esz) then
+              csr[VSTART] = e
+              return trap(CAUSE_STORE_ACCESS, addr)
             else
               local val = velt_get(v, vr, deew, e)
               if deew == 8 then
