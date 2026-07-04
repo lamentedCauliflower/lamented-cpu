@@ -354,9 +354,19 @@ local function eV(f6, vm, vs2, vs1, f3, vd)
     0x57 + lsh(vd, 7) + lsh(f3, 12) + lsh(vs1, 15) + lsh(vs2, 20) + lsh(vm, 25) + lsh(f6, 26)
   )
 end
--- unit-stride vector load (0x07) / store (0x27): nf=0, mew=0, mop=0, lumop=0
-local function eVmem(op, width, vm, rs1, vreg3)
-  return u32(op + lsh(vreg3, 7) + lsh(width, 12) + lsh(rs1, 15) + lsh(vm, 25))
+-- vector load (0x07) / store (0x27): nf | mew=0 | mop | vm | lumop/rs2/vs2 |
+-- rs1 | width | vd/vs3
+local function eVmem(op, width, vm, rs1, r2, mop, nf, vreg3)
+  return u32(
+    op
+      + lsh(vreg3, 7)
+      + lsh(width, 12)
+      + lsh(rs1, 15)
+      + lsh(r2, 20)
+      + lsh(vm, 25)
+      + lsh(mop, 26)
+      + lsh(nf, 29)
+  )
 end
 local function eJ(op, rd, off)
   off = u32(off)
@@ -524,10 +534,65 @@ function M.assemble(src, resolver)
     ["vzext.vf2"] = 6,
     ["vsext.vf2"] = 7,
   }
-  local VMEM = {} -- "vle8.v" -> {op, width}; vse mirrors with the store opcode
-  for w, f3 in pairs({ [8] = 0, [16] = 5, [32] = 6 }) do
-    VMEM["vle" .. w .. ".v"] = { 0x07, f3 }
-    VMEM["vse" .. w .. ".v"] = { 0x27, f3 }
+
+  -- Vector memory mnemonic -> encoding fields + operand style. Covers every
+  -- Zve32x form: unit-stride, fault-only-first, strided, indexed
+  -- (ordered/unordered), mask, whole-register, and the seg<n> variants of
+  -- each (ADR-0012). Styles: "unit" = vd,(rs1); "stride" = vd,(rs1),xreg;
+  -- "index" = vd,(rs1),vreg. Returns nil for non-memory mnemonics.
+  local WIDTH_F3 = { ["8"] = 0, ["16"] = 5, ["32"] = 6, ["64"] = 7 }
+  local function vmemform(m)
+    local ls, rest = m:match("^v([ls])(.+)%.v$")
+    if not ls then
+      return nil
+    end
+    local op = ls == "l" and 0x07 or 0x27
+    local n, e
+    n, e = rest:match("^(%d)re(%d+)$") -- whole-register load
+    if n and op == 0x07 then
+      return { op = op, nf = n - 1, mop = 0, um = 0x08, w = WIDTH_F3[e], style = "unit" }
+    end
+    n = rest:match("^(%d)r$") -- whole-register store (EEW=8 form only)
+    if n and op == 0x27 then
+      return { op = op, nf = n - 1, mop = 0, um = 0x08, w = 0, style = "unit" }
+    end
+    if rest == "m" then -- vlm/vsm mask load/store
+      return { op = op, nf = 0, mop = 0, um = 0x0B, w = 0, style = "unit", nomask = true }
+    end
+    n, e = rest:match("^seg(%d)e(%d+)$") -- unit-stride segment
+    if n then
+      return { op = op, nf = n - 1, mop = 0, um = 0, w = WIDTH_F3[e], style = "unit" }
+    end
+    n, e = rest:match("^seg(%d)e(%d+)ff$") -- fault-only-first segment
+    if n and op == 0x07 then
+      return { op = op, nf = n - 1, mop = 0, um = 0x10, w = WIDTH_F3[e], style = "unit" }
+    end
+    n, e = rest:match("^sseg(%d)e(%d+)$") -- strided segment
+    if n then
+      return { op = op, nf = n - 1, mop = 2, w = WIDTH_F3[e], style = "stride" }
+    end
+    local ord
+    ord, n, e = rest:match("^([ou])xseg(%d)ei(%d+)$") -- indexed segment
+    if ord then
+      return { op = op, nf = n - 1, mop = ord == "o" and 3 or 1, w = WIDTH_F3[e], style = "index" }
+    end
+    ord, e = rest:match("^([ou])xei(%d+)$") -- indexed
+    if ord then
+      return { op = op, nf = 0, mop = ord == "o" and 3 or 1, w = WIDTH_F3[e], style = "index" }
+    end
+    e = rest:match("^se(%d+)$") -- strided
+    if e then
+      return { op = op, nf = 0, mop = 2, w = WIDTH_F3[e], style = "stride" }
+    end
+    e = rest:match("^e(%d+)ff$") -- fault-only-first
+    if e and op == 0x07 then
+      return { op = op, nf = 0, mop = 0, um = 0x10, w = WIDTH_F3[e], style = "unit" }
+    end
+    e = rest:match("^e(%d+)$") -- unit-stride
+    if e then
+      return { op = op, nf = 0, mop = 0, um = 0, w = WIDTH_F3[e], style = "unit" }
+    end
+    return nil
   end
 
   local ALU = {
@@ -785,13 +850,24 @@ function M.assemble(src, resolver)
       emit(function()
         return eR(0x57, 7, 0x40, rd, rs1, rs2)
       end)
-    elseif VMEM[m] then
-      local op, width = VMEM[m][1], VMEM[m][2]
+    elseif vmemform(m) then
+      local fm = vmemform(m)
       local vd = vreg(o[1])
       local _, rs1 = parse_mem(o[2])
-      local vm = o[3] == "v0.t" and 0 or 1
+      local r2, masked
+      if fm.style == "stride" then
+        r2 = reg(o[3])
+        masked = o[4] == "v0.t"
+      elseif fm.style == "index" then
+        r2 = vreg(o[3])
+        masked = o[4] == "v0.t"
+      else
+        r2 = fm.um
+        masked = o[3] == "v0.t"
+      end
+      local vm = (masked and not fm.nomask) and 0 or 1
       emit(function()
-        return eVmem(op, width, vm, rs1, vd)
+        return eVmem(fm.op, fm.w, vm, rs1, r2, fm.mop, fm.nf, vd)
       end)
     elseif VF6[m:match("^(v%w+)%.")] and VSUFF[m:match("%.(v[vxi]m?)$")] then
       local f6, f3 = VF6[m:match("^(v%w+)%.")], VSUFF[m:match("%.(v[vxi]m?)$")]

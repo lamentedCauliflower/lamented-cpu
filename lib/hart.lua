@@ -618,33 +618,96 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
     else
       error(string.format("unimplemented vector instruction funct6=0x%02x funct3=%d", f6, f3))
     end
-  else -- unit-stride loads (0x07) / stores (0x27)
+  else -- vector loads (0x07) / stores (0x27)
     local eew = ({ [0] = 8, [5] = 16, [6] = 32 })[f3]
-    if not eew or bits(w, 31, 26) ~= 0 or rs2 ~= 0 then
+    local mop, nf, mew = bits(w, 27, 26), bits(w, 31, 29), bits(w, 28, 28)
+    if not eew or mew ~= 0 then
       error(string.format("unimplemented vector memory form 0x%08x", w))
     end
+    local load = op == 0x07
     local base = x[rs1]
-    for e = vstart, vl - 1 do
-      if vm == 1 or mask_bit(v, e) == 1 then
-        local addr = u32(base + e * (eew / 8))
-        if op == 0x07 then
-          local val
-          if eew == 8 then
-            val = self.mem:rb(addr)
-          elseif eew == 16 then
-            val = self.mem:r16(addr)
+
+    if mop == 0 and rs2 == 0x08 then
+      -- whole-register vl<n>re<eew>/vs<n>r: moves nf+1 registers regardless
+      -- of vl and the mask (EEW only affects non-architectural layout hints)
+      for r = 0, nf do
+        for wi = 0, 3 do
+          local addr = u32(base + r * 16 + wi * 4)
+          if load then
+            v[rd + r][wi + 1] = self.mem:r32(addr)
           else
-            val = self.mem:r32(addr)
+            self:store32(addr, v[rd + r][wi + 1])
           end
-          velt_set(v, rd, eew, e, val)
+        end
+      end
+    elseif mop == 0 and rs2 == 0x0B then
+      -- vlm/vsm: EEW=8 over ceil(vl/8) bytes, unconditionally unmasked
+      local evl = math.ceil(vl / 8)
+      for e = vstart, evl - 1 do
+        local addr = u32(base + e)
+        if load then
+          velt_set(v, rd, 8, e, self.mem:rb(addr))
         else
-          local val = velt_get(v, rd, eew, e)
-          if eew == 8 then
-            self.mem:wb(addr, val)
-          elseif eew == 16 then
-            self.mem:w16(addr, val)
+          self.mem:wb(addr, velt_get(v, rd, 8, e))
+        end
+      end
+    else
+      -- unit-stride (with fault-only-first), strided, indexed, and their
+      -- segment forms in one element x field loop. Indexed forms address by
+      -- an index vector at the encoded EEW but move data at the vtype SEW;
+      -- everything else moves data at the encoded EEW. Loads never fault, so
+      -- fault-only-first is the unit-stride path with vl untouched.
+      local deew -- data element width
+      if mop == 1 or mop == 3 then
+        deew = sew
+      else
+        deew = eew
+        if mop == 0 and rs2 ~= 0 and rs2 ~= 0x10 then
+          error(string.format("unimplemented vector memory form 0x%08x", w))
+        end
+      end
+      local esz = deew / 8
+      -- registers per segment field: max(1, EMUL) with EMUL = deew/sew * LMUL
+      local lm = band(csr[VTYPE], 7)
+      local num, den
+      if lm <= 3 then
+        num, den = lsh(1, lm), 1
+      else
+        num, den = 1, lsh(1, 8 - lm)
+      end
+      local rpf = math.max(1, math.floor((deew * num) / (sew * den)))
+      local stride = mop == 2 and signed(x[rs2]) or (nf + 1) * esz
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local ebase
+          if mop == 1 or mop == 3 then
+            ebase = base + velt_get(v, rs2, eew, e)
           else
-            self:store32(addr, val)
+            ebase = base + e * stride
+          end
+          for f = 0, nf do
+            local addr = u32(ebase + f * esz)
+            local vr = rd + f * rpf
+            if load then
+              local val
+              if deew == 8 then
+                val = self.mem:rb(addr)
+              elseif deew == 16 then
+                val = self.mem:r16(addr)
+              else
+                val = self.mem:r32(addr)
+              end
+              velt_set(v, vr, deew, e, val)
+            else
+              local val = velt_get(v, vr, deew, e)
+              if deew == 8 then
+                self.mem:wb(addr, val)
+              elseif deew == 16 then
+                self.mem:w16(addr, val)
+              else
+                self:store32(addr, val)
+              end
+            end
           end
         end
       end
