@@ -483,12 +483,47 @@ function M.assemble(src, resolver)
 
   -- OP-V arithmetic, table-driven (ADR-0012: families grow by table rows, not
   -- new branches). funct3 selects the operand category: OPIVV=0, OPMVV=2,
-  -- OPIVI=3, OPIVX=4, OPMVX=6. Encoded operand order is vd, vs2, vs1/rs1/imm.
-  local VARITH = {
-    ["vadd.vv"] = { f6 = 0x00, f3 = 0 },
+  -- OPIVI=3, OPIVX=4, OPMVX=6; the .vv/.vx/.vi suffix picks it, and a trailing
+  -- `m` (.vvm/.vxm/.vim) is the carry/merge form with vm=0 and a literal v0
+  -- final operand. Encoded operand order is vd, vs2, vs1/rs1/imm.
+  local VF6 = {
+    vadd = 0x00,
+    vsub = 0x02,
+    vrsub = 0x03,
+    vminu = 0x04,
+    vmin = 0x05,
+    vmaxu = 0x06,
+    vmax = 0x07,
+    vand = 0x09,
+    vor = 0x0A,
+    vxor = 0x0B,
+    vadc = 0x10,
+    vmadc = 0x11,
+    vsbc = 0x12,
+    vmsbc = 0x13,
+    vmerge = 0x17,
+    vmseq = 0x18,
+    vmsne = 0x19,
+    vmsltu = 0x1A,
+    vmslt = 0x1B,
+    vmsleu = 0x1C,
+    vmsle = 0x1D,
+    vmsgtu = 0x1E,
+    vmsgt = 0x1F,
+    vsll = 0x25,
+    vsrl = 0x28,
+    vsra = 0x29,
   }
+  local VSUFF = { vv = 0, vx = 4, vi = 3, vvm = 0, vxm = 4, vim = 3 }
   -- vmv.v.* is vmerge's encoding with vm=1 and vs2=0
-  local VMV = { ["vmv.v.i"] = 3, ["vmv.v.x"] = 4 }
+  local VMV = { ["vmv.v.v"] = 0, ["vmv.v.i"] = 3, ["vmv.v.x"] = 4 }
+  -- VXUNARY0 (OPMVV funct6=0x12): vs1 field encodes the widening factor/sign
+  local VEXT = {
+    ["vzext.vf4"] = 4,
+    ["vsext.vf4"] = 5,
+    ["vzext.vf2"] = 6,
+    ["vsext.vf2"] = 7,
+  }
   local VMEM = {} -- "vle8.v" -> {op, width}; vse mirrors with the store opcode
   for w, f3 in pairs({ [8] = 0, [16] = 5, [32] = 6 }) do
     VMEM["vle" .. w .. ".v"] = { 0x07, f3 }
@@ -758,14 +793,15 @@ function M.assemble(src, resolver)
       emit(function()
         return eVmem(op, width, vm, rs1, vd)
       end)
-    elseif VARITH[m] then
-      local f6, f3 = VARITH[m].f6, VARITH[m].f3
+    elseif VF6[m:match("^(v%w+)%.")] and VSUFF[m:match("%.(v[vxi]m?)$")] then
+      local f6, f3 = VF6[m:match("^(v%w+)%.")], VSUFF[m:match("%.(v[vxi]m?)$")]
       local vd, vs2 = vreg(o[1]), vreg(o[2])
-      local vm = o[4] == "v0.t" and 0 or 1
+      -- carry/merge forms name v0 as their final operand; masked forms say v0.t
+      local vm = (m:sub(-1) == "m" or o[4] == "v0.t") and 0 or 1
       local vs1 -- register number or masked immediate, per operand category
       if f3 == 3 then
         vs1 = band(evalexpr(o[3], sym, weak), 0x1F)
-      elseif f3 == 4 or f3 == 6 then
+      elseif f3 == 4 then
         vs1 = reg(o[3])
       else
         vs1 = vreg(o[3])
@@ -776,9 +812,23 @@ function M.assemble(src, resolver)
     elseif VMV[m] then
       local f3 = VMV[m]
       local vd = vreg(o[1])
-      local vs1 = f3 == 3 and band(evalexpr(o[2], sym, weak), 0x1F) or reg(o[2])
+      local vs1
+      if f3 == 3 then
+        vs1 = band(evalexpr(o[2], sym, weak), 0x1F)
+      elseif f3 == 4 then
+        vs1 = reg(o[2])
+      else
+        vs1 = vreg(o[2])
+      end
       emit(function()
         return eV(0x17, 1, 0, vs1, f3, vd)
+      end)
+    elseif VEXT[m] then
+      local code = VEXT[m]
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(0x12, vm, vs2, code, 2, vd)
       end)
     else
       error("unsupported instruction '" .. m .. "'")

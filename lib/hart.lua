@@ -109,6 +109,104 @@ local function mask_bit(v, e)
   return band(rsh(v[0][math.floor(e / 32) + 1], e % 32), 1)
 end
 
+-- write bit e of the mask register vd (mask-producing compares and carry-outs
+-- touch exactly their bit: other bits stay undisturbed)
+local function mask_set_bit(v, vd, e, on)
+  local reg = v[vd]
+  local wi = math.floor(e / 32) + 1
+  local b = lsh(1, e % 32)
+  reg[wi] = on and bor(reg[wi], b) or band(reg[wi], bnot(b))
+end
+
+-- signed view of a sew-wide element
+local function sxt(val, sew)
+  if val >= 2 ^ (sew - 1) then
+    return val - 2 ^ sew
+  end
+  return val
+end
+
+-- OP-V single-width elementwise integer ops by funct6 (vv/vx/vi share the
+-- table): f(vs2 element, vs1/rs1/imm operand, sew) -> raw value, masked to
+-- sew width by velt_set. Shift amounts use the low lg2(sew) bits.
+local VOPI = {
+  [0x00] = function(a, b)
+    return a + b
+  end, -- vadd
+  [0x02] = function(a, b)
+    return a - b
+  end, -- vsub
+  [0x03] = function(a, b)
+    return b - a
+  end, -- vrsub
+  [0x04] = function(a, b)
+    return math.min(a, b)
+  end, -- vminu
+  [0x05] = function(a, b, s)
+    return sxt(a, s) < sxt(b, s) and a or b
+  end, -- vmin
+  [0x06] = function(a, b)
+    return math.max(a, b)
+  end, -- vmaxu
+  [0x07] = function(a, b, s)
+    return sxt(a, s) > sxt(b, s) and a or b
+  end, -- vmax
+  [0x09] = function(a, b)
+    return band(a, b)
+  end, -- vand
+  [0x0A] = function(a, b)
+    return bor(a, b)
+  end, -- vor
+  [0x0B] = function(a, b)
+    return rv.bxor(a, b)
+  end, -- vxor
+  [0x25] = function(a, b, s)
+    return lsh(a, band(b, s - 1))
+  end, -- vsll
+  [0x28] = function(a, b, s)
+    return rsh(a, band(b, s - 1))
+  end, -- vsrl
+  [0x29] = function(a, b, s)
+    return ash(u32(sxt(a, s)), band(b, s - 1))
+  end, -- vsra
+}
+
+-- VXUNARY0 vs1-field codes: { widening factor, signed }
+local VEXTF = {
+  [4] = { 4, false }, -- vzext.vf4
+  [5] = { 4, true }, -- vsext.vf4
+  [6] = { 2, false }, -- vzext.vf2
+  [7] = { 2, true }, -- vsext.vf2
+}
+
+-- mask-producing integer compares by funct6: pred(vs2 element, operand, sew)
+local VCMP = {
+  [0x18] = function(a, b)
+    return a == b
+  end, -- vmseq
+  [0x19] = function(a, b)
+    return a ~= b
+  end, -- vmsne
+  [0x1A] = function(a, b)
+    return a < b
+  end, -- vmsltu
+  [0x1B] = function(a, b, s)
+    return sxt(a, s) < sxt(b, s)
+  end, -- vmslt
+  [0x1C] = function(a, b)
+    return a <= b
+  end, -- vmsleu
+  [0x1D] = function(a, b, s)
+    return sxt(a, s) <= sxt(b, s)
+  end, -- vmsle
+  [0x1E] = function(a, b)
+    return a > b
+  end, -- vmsgtu
+  [0x1F] = function(a, b, s)
+    return sxt(a, s) > sxt(b, s)
+  end, -- vmsgt
+}
+
 function M:load(image)
   for addr, word in pairs(image.words) do
     self.mem:w32(addr, word)
@@ -442,16 +540,80 @@ function M:vstep(w, op, rd, f3, rs1, rs2, npc, set, trap)
 
   if op == 0x57 then -- OP-V arithmetic
     local f6 = bits(w, 31, 26)
-    if f3 == 0 and f6 == 0x00 then -- vadd.vv
+    local sewmask = 2 ^ sew - 1
+    -- operand b: vs1 element (vv), truncated x[rs1] (vx), or sew-truncated
+    -- sign-extended 5-bit immediate (vi) -- truncate-then-interpret, per spec
+    local bscalar
+    if f3 == 4 or f3 == 6 then
+      bscalar = band(x[rs1], sewmask)
+    elseif f3 == 3 then
+      bscalar = band(sext(rs1, 5), sewmask)
+    end
+    local function bval(e)
+      return bscalar or velt_get(v, rs1, sew, e)
+    end
+    local opiv = f3 == 0 or f3 == 3 or f3 == 4
+
+    if opiv and VOPI[f6] then
+      local f = VOPI[f6]
       for e = vstart, vl - 1 do
         if vm == 1 or mask_bit(v, e) == 1 then
-          velt_set(v, rd, sew, e, velt_get(v, rs2, sew, e) + velt_get(v, rs1, sew, e))
+          velt_set(v, rd, sew, e, f(velt_get(v, rs2, sew, e), bval(e), sew))
         end
       end
-    elseif f3 == 3 and f6 == 0x17 and vm == 1 and rs2 == 0 then -- vmv.v.i
-      local imm = sext(rs1, 5)
+    elseif opiv and VCMP[f6] then
+      local p = VCMP[f6]
       for e = vstart, vl - 1 do
-        velt_set(v, rd, sew, e, imm)
+        if vm == 1 or mask_bit(v, e) == 1 then
+          mask_set_bit(v, rd, e, p(velt_get(v, rs2, sew, e), bval(e), sew))
+        end
+      end
+    elseif opiv and (f6 == 0x10 or f6 == 0x12) then
+      -- vadc/vsbc: v0 is the carry/borrow input, every element active
+      for e = vstart, vl - 1 do
+        local a, b, cin = velt_get(v, rs2, sew, e), bval(e), mask_bit(v, e)
+        velt_set(v, rd, sew, e, f6 == 0x10 and (a + b + cin) or (a - b - cin))
+      end
+    elseif opiv and (f6 == 0x11 or f6 == 0x13) then
+      -- vmadc/vmsbc: carry/borrow-out into a mask register; vm=0 also adds
+      -- the carry/borrow-in, every element active either way
+      for e = vstart, vl - 1 do
+        local a, b = velt_get(v, rs2, sew, e), bval(e)
+        local cin = vm == 0 and mask_bit(v, e) or 0
+        local out
+        if f6 == 0x11 then
+          out = a + b + cin > sewmask
+        else
+          out = a - b - cin < 0
+        end
+        mask_set_bit(v, rd, e, out)
+      end
+    elseif opiv and f6 == 0x17 then
+      -- vm=0: vmerge (v0 selects); vm=1: vmv.v.* (vs2 encoded as v0)
+      for e = vstart, vl - 1 do
+        local val
+        if vm == 1 or mask_bit(v, e) == 1 then
+          val = bval(e)
+        else
+          val = velt_get(v, rs2, sew, e)
+        end
+        velt_set(v, rd, sew, e, val)
+      end
+    elseif f3 == 2 and f6 == 0x12 and VEXTF[rs1] then
+      -- VXUNARY0: vzext/vsext.vf2/.vf4 read the source at a narrower EEW
+      local frac, sgn = VEXTF[rs1][1], VEXTF[rs1][2]
+      local seew = sew / frac
+      if seew < 8 then
+        return trap(CAUSE_ILLEGAL, w)
+      end
+      for e = vstart, vl - 1 do
+        if vm == 1 or mask_bit(v, e) == 1 then
+          local val = velt_get(v, rs2, seew, e)
+          if sgn then
+            val = u32(sxt(val, seew))
+          end
+          velt_set(v, rd, sew, e, val)
+        end
       end
     else
       error(string.format("unimplemented vector instruction funct6=0x%02x funct3=%d", f6, f3))

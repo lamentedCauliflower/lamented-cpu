@@ -78,12 +78,96 @@ local ALLOW = {
 
 -- Zve32x conformance: riscv-vector-tests fixtures (ADR-0012), same pipeline,
 -- separate allowlist -- it grows per instruction family until the full zve32x
--- preset is green (#37..#47; the ship gate lives in #47).
-local VALLOW = {
+-- preset is green (#37..#47; the ship gate lives in #47). Families list every
+-- split file the vendor command produced for that mnemonic.
+local VFAMILIES = {
   -- #37 walking skeleton
-  "vadd_vv-0",
-  "vadd_vv-1",
+  { "vadd_vv", 2 },
+  -- #39 single-width integer arithmetic
+  { "vadd_vi", 4 },
+  { "vadd_vx", 5 },
+  { "vsub_vv", 2 },
+  { "vsub_vx", 7 },
+  { "vrsub_vi", 4 },
+  { "vrsub_vx", 5 },
+  { "vadc_vim", 2 },
+  { "vadc_vvm", 1 },
+  { "vadc_vxm", 3 },
+  { "vmadc_vi", 2 },
+  { "vmadc_vim", 2 },
+  { "vmadc_vv", 1 },
+  { "vmadc_vvm", 1 },
+  { "vmadc_vx", 3 },
+  { "vmadc_vxm", 3 },
+  { "vsbc_vvm", 1 },
+  { "vsbc_vxm", 4 },
+  { "vmsbc_vv", 1 },
+  { "vmsbc_vvm", 1 },
+  { "vmsbc_vx", 3 },
+  { "vmsbc_vxm", 3 },
+  { "vand_vi", 4 },
+  { "vand_vv", 2 },
+  { "vand_vx", 5 },
+  { "vor_vi", 4 },
+  { "vor_vv", 2 },
+  { "vor_vx", 5 },
+  { "vxor_vi", 4 },
+  { "vxor_vv", 2 },
+  { "vxor_vx", 5 },
+  { "vsll_vi", 4 },
+  { "vsll_vv", 2 },
+  { "vsll_vx", 5 },
+  { "vsrl_vi", 4 },
+  { "vsrl_vv", 2 },
+  { "vsrl_vx", 5 },
+  { "vsra_vi", 4 },
+  { "vsra_vv", 2 },
+  { "vsra_vx", 5 },
+  { "vmseq_vi", 4 },
+  { "vmseq_vv", 2 },
+  { "vmseq_vx", 5 },
+  { "vmsne_vi", 4 },
+  { "vmsne_vv", 2 },
+  { "vmsne_vx", 5 },
+  { "vmsltu_vv", 2 },
+  { "vmsltu_vx", 5 },
+  { "vmslt_vv", 2 },
+  { "vmslt_vx", 5 },
+  { "vmsleu_vi", 4 },
+  { "vmsleu_vv", 2 },
+  { "vmsleu_vx", 5 },
+  { "vmsle_vi", 4 },
+  { "vmsle_vv", 2 },
+  { "vmsle_vx", 5 },
+  { "vmsgtu_vi", 4 },
+  { "vmsgtu_vx", 5 },
+  { "vmsgt_vi", 4 },
+  { "vmsgt_vx", 5 },
+  { "vminu_vv", 2 },
+  { "vminu_vx", 5 },
+  { "vmin_vv", 2 },
+  { "vmin_vx", 5 },
+  { "vmaxu_vv", 2 },
+  { "vmaxu_vx", 5 },
+  { "vmax_vv", 2 },
+  { "vmax_vx", 5 },
+  { "vmerge_vim", 2 },
+  { "vmerge_vvm", 1 },
+  { "vmerge_vxm", 3 },
+  { "vmv_v_i", 1 },
+  { "vmv_v_v", 1 },
+  { "vmv_v_x", 1 },
+  { "vzext_vf2", 1 },
+  { "vzext_vf4", 1 },
+  { "vsext_vf2", 1 },
+  { "vsext_vf4", 1 },
 }
+local VALLOW = {}
+for _, fam in ipairs(VFAMILIES) do
+  for i = 0, fam[2] - 1 do
+    VALLOW[#VALLOW + 1] = fam[1] .. "-" .. i
+  end
+end
 
 local function read(path)
   local f = assert(io.open(path, "r"), "missing fixture: " .. path)
