@@ -398,13 +398,10 @@ local function fill_registers(pane, cpu)
   end
 end
 
--- vector pane (#42): readout line + a v0..v31 element grid at the live SEW.
--- Collapsed by default so scalar-only debugging keeps today's layout; while
--- collapsed the refresh skips it entirely (nothing to keep current).
+-- vector view (#42): readout line + a v0..v31 element grid at the live SEW.
+-- Renders into the right column's browser pane when the "Vectors" preset is
+-- selected (cpu.vec_view); the Address/Val. header hides while it shows.
 local function fill_vectors(pane, cpu)
-  if not pane.visible then
-    return
-  end
   pane.clear()
   if not cpu.hart then
     pane.add({ type = "label", caption = "(not assembled)" })
@@ -424,6 +421,9 @@ end
 local MEM_ROWS = 16 -- ponytail: the fixed window IS the virtualization (Factorio has none)
 
 local function fill_memory(pane, cpu)
+  if cpu.vec_view then
+    return fill_vectors(pane, cpu)
+  end
   pane.clear()
   if not cpu.hart then
     pane.add({ type = "label", caption = "(not assembled)" })
@@ -473,11 +473,6 @@ local function open_gui(player, unit, cpu)
   local regs = left.add({ type = "scroll-pane", name = "regs" })
   regs.style.maximal_height = 630
   fill_registers(regs, cpu)
-  -- vector pane (#42), below the scalar register file, collapsed by default
-  left.add({ type = "button", name = "riscv_vectoggle", caption = "▶ Vector" })
-  local vec = left.add({ type = "scroll-pane", name = "vec" })
-  vec.style.maximal_height = 300
-  vec.visible = false
 
   -- centre: control panel
   local center = body.add({
@@ -527,15 +522,16 @@ local function open_gui(player, unit, cpu)
   nav.add({
     type = "drop-down",
     name = "riscv_region",
-    items = { "Program", "I/O", "Stack", "PC" },
-    selected_index = 1,
+    items = { "Program", "I/O", "Stack", "PC", "Vectors" },
+    selected_index = cpu.vec_view and 5 or 1,
   })
   nav.add({ type = "textfield", name = "riscv_addr" })
   nav.add({ type = "button", name = "riscv_memup", caption = "Up" })
   nav.add({ type = "button", name = "riscv_memdn", caption = "Down" })
-  local mhead = right.add({ type = "table", column_count = 2 })
+  local mhead = right.add({ type = "table", name = "mhead", column_count = 2 })
   mhead.add({ type = "label", caption = "Address" })
   mhead.add({ type = "label", caption = "Val." })
+  mhead.visible = not cpu.vec_view
   local mempane = right.add({ type = "scroll-pane", name = "mem" })
   mempane.style.maximal_height = 630
   fill_memory(mempane, cpu)
@@ -562,7 +558,7 @@ local function refresh(unit)
         c.transport.riscv_enable.switch_state = cpu.enabled and "right" or "left"
         c.transport.riscv_pause.caption = pause_caption(cpu)
         fill_registers(frame.body.left.regs, cpu)
-        fill_vectors(frame.body.left.vec, cpu)
+        frame.body.right.mhead.visible = not cpu.vec_view
         fill_memory(frame.body.right.mem, cpu)
       end
     end
@@ -635,16 +631,16 @@ script.on_event(defines.events.on_gui_click, function(event)
     else
       Inspector.pause(cpu)
     end
-  elseif el.name == "riscv_vectoggle" then
-    -- expand/collapse the vector pane; works in any mode since it only touches
-    -- visibility and the refresh below repaints the now-visible content
-    local vec = el.parent.vec
-    vec.visible = not vec.visible
-    el.caption = vec.visible and "▼ Vector" or "▶ Vector"
   elseif el.name == "riscv_memup" then
+    if cpu.vec_view then
+      return -- paging is a memory-window action; no-op while Vectors shows
+    end
     cpu.mem_base = math.max(0, (cpu.mem_base or 0x80000000) - MEM_ROWS * 4)
     cpu.prev_mem = nil
   elseif el.name == "riscv_memdn" then
+    if cpu.vec_view then
+      return
+    end
     cpu.mem_base = (cpu.mem_base or 0x80000000) + MEM_ROWS * 4
     cpu.prev_mem = nil
   else
@@ -668,7 +664,9 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
   end
 end)
 
--- memory region preset drop-down: jump the window to program / I/O / stack / pc.
+-- memory region preset drop-down: jump the window to program / I/O / stack / pc,
+-- or swap the pane to the vector register view (#42) -- Vectors is a view, not an
+-- address, so it flips vec_view instead of moving mem_base.
 local REGION = { "program", "io", "stack", "pc" }
 script.on_event(defines.events.on_gui_selection_state_changed, function(event)
   local el = event.element
@@ -678,8 +676,12 @@ script.on_event(defines.events.on_gui_selection_state_changed, function(event)
   local unit = storage.viewing[event.player_index]
   local cpu = unit and storage.cpus[unit]
   if cpu then
-    cpu.mem_base = Inspector.region_base(cpu.hart, REGION[el.selected_index] or "program")
-    cpu.prev_mem = nil
+    local region = REGION[el.selected_index]
+    cpu.vec_view = not region or nil
+    if region then
+      cpu.mem_base = Inspector.region_base(cpu.hart, region)
+      cpu.prev_mem = nil
+    end
     refresh(unit)
   end
 end)
