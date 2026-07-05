@@ -1,4 +1,20 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.2.0
+Date: 2026-07-05
+  Features:
+    - [dev] vendor command for the full zve32x fixture preset
+    - [hart] Zve32x complete vector memory instructions
+    - [hart] Zve32x multiply, widening, and fixed-point families
+    - [hart] Zve32x permutation instructions
+    - [hart] Zve32x reductions and mask instructions
+    - [hart] Zve32x ship flip — misa V bit and full-preset gate
+    - [hart] Zve32x single-width integer arithmetic
+    - [hart] Zve32x vector walking skeleton
+    - [inspector] move vector pane into memory browser
+    - [inspector] vector pane with SEW-split element cells
+    - [io] vector stores into trigger registers fault
+    - merge feat/vectors into main
+---------------------------------------------------------------------------------------------------
 Version: 1.1.0
 Date: 2026-07-03
   Features:
