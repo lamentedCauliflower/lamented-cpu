@@ -258,6 +258,97 @@ INI
       echo "wrote $(ls "$GEN_OUT"/*.s | wc -l) .s fixtures (riscv-tests @ $rev)"
     '';
 
+    # Regenerate the committed riscv-vector-tests .s fixtures: the full zve32x
+    # preset at VLEN=128 / XLEN=32 (ADR-0012). Pipeline per instruction: the
+    # pinned Go generator emits a stage-1 source; a bare-metal RISC-V gcc
+    # compiles it; pspike (the pinned Spike + the generator's magic custom-0
+    # instruction) prints the golden TEST_CASE patches; the generator's merger
+    # splices them into a self-checking stage-2 source, which is verified under
+    # stock pinned Spike and then flattened with cpp against our Test env
+    # (spec/riscv-env) into a plain committed .s. Go/Spike/gcc/cpp are pulled
+    # via nix shell at vendor time only -- the `devenv test` CI gate never sees
+    # them. Reproducible: the generator's randomness is input-seeded, and both
+    # revisions are pinned here (Spike's is the generator CI's own pin).
+    scripts.gen-riscv-vector-tests.exec = ''
+      set -euo pipefail
+      gen_rev="f76bff121dce91b6b23e1d37be77a5e44af914c3" # pinned riscv-vector-tests
+      spike_rev="20feb9c2bf2a7deab964d8190b0cbd4b4131bec3" # pinned riscv-isa-sim
+      export GEN_ENV="$PWD/spec/riscv-env"
+      export GEN_OUT="$PWD/spec/fixtures/riscv-vector-tests"
+      work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+      echo "== clone riscv-vector-tests @ $gen_rev =="
+      git clone --quiet https://github.com/chipsalliance/riscv-vector-tests "$work/gen"
+      git -C "$work/gen" checkout --quiet "$gen_rev"
+      git -C "$work/gen" submodule update --init --quiet env/riscv-test-env
+      echo "== clone riscv-isa-sim @ $spike_rev =="
+      git clone --quiet https://github.com/riscv-software-src/riscv-isa-sim "$work/spike"
+      git -C "$work/spike" checkout --quiet "$spike_rev"
+      export GEN_WORK="$work"
+      nix shell nixpkgs#go nixpkgs#gcc nixpkgs#dtc nixpkgs#gnumake \
+        nixpkgs#pkgsCross.riscv64-embedded.buildPackages.gcc -c bash -c '
+        set -euo pipefail
+        cd "$GEN_WORK/gen"
+        echo "== build spike (golden model) =="
+        mkdir -p "$GEN_WORK/spike/build"
+        ( cd "$GEN_WORK/spike/build" && ../configure --prefix="$GEN_WORK/spike-install" \
+            >/dev/null && make -j"$(nproc)" >/dev/null && make install >/dev/null )
+        echo "== build generator, merger, pspike =="
+        export GOFLAGS=-mod=mod GOPATH="$GEN_WORK/go" GOCACHE="$GEN_WORK/gocache"
+        go build -o build/generator .
+        go build -o build/merger merger/merger.go
+        g++ -std=c++17 -I"$GEN_WORK/spike-install/include" -L"$GEN_WORK/spike-install/lib" \
+          pspike/pspike.cc -lriscv -lfesvr -o build/pspike
+        export ISA=rv32gcv_zvl128b_zve32f_zfh_zfhmin_zvfh
+        out="$GEN_WORK/out"
+        mkdir -p "$out/stage1" "$out/bin1" "$out/patch" "$out/stage2" "$out/bin2"
+        echo "== stage 1: generate (zve32x preset: VLEN=128 XLEN=32 INTEGER=1) =="
+        ./build/generator -VLEN 128 -XLEN 32 -split=10000 -integer=1 -pattern=".*" \
+          -testfloat3level=2 -repeat=1 -stage1output "$out/stage1/" -configs configs/ \
+          -march rv32gcv
+        echo "== stage 1: compile + pspike golden patches =="
+        cc() {
+          riscv64-none-elf-gcc -march=rv32gcv -mabi=ilp32f -static -mcmodel=medany \
+            -fvisibility=hidden -nostdlib -nostartfiles -DENTROPY=0xdeadbeef \
+            -DLFSR_BITS=9 -fno-tree-loop-distribute-patterns \
+            -Ienv/riscv-test-env/p -Imacros/general -Tenv/riscv-test-env/p/link.ld "$@"
+        }
+        export -f cc
+        patch_one() {
+          set -e
+          t=$(basename "$1" .S)
+          cc "$1" -o "$GEN_WORK/out/bin1/$t"
+          LD_LIBRARY_PATH="$GEN_WORK/spike-install/lib" ./build/pspike --isa="$ISA" \
+            "$GEN_WORK/out/bin1/$t" > "$GEN_WORK/out/patch/$t.patch"
+        }
+        export -f patch_one
+        find "$out/stage1" -name "*.S" -print0 \
+          | xargs -0 -P"$(nproc)" -I{} bash -c "patch_one \"\$@\"" _ {}
+        echo "== stage 2: merge golden values =="
+        ./build/merger -stage1output "$out/stage1/" -stage2output "$out/stage2/" \
+          -stage2patch "$out/patch/"
+        echo "== stage 2: verify every test under stock spike =="
+        verify_one() {
+          set -e
+          t=$(basename "$1" .S)
+          cc "$1" -o "$GEN_WORK/out/bin2/$t"
+          "$GEN_WORK/spike-install/bin/spike" --isa="$ISA" "$GEN_WORK/out/bin2/$t" \
+            >/dev/null || { echo "SPIKE-FAIL $t" >&2; exit 1; }
+        }
+        export -f verify_one
+        find "$out/stage2" -name "*.S" -print0 \
+          | xargs -0 -P"$(nproc)" -I{} bash -c "verify_one \"\$@\"" _ {}
+        echo "== flatten with cpp against the Test env =="
+        find "$GEN_OUT" -name "*.s" -delete 2>/dev/null || true
+        mkdir -p "$GEN_OUT"
+        for s in "$out/stage2/"*.S; do
+          t=$(basename "$s" .S)
+          cpp -E -P -nostdinc -D__riscv_xlen=32 -I "$GEN_ENV" -I macros/general \
+            "$s" > "$GEN_OUT/$t.s"
+        done
+      '
+      echo "wrote $(ls "$GEN_OUT"/*.s | wc -l) .s fixtures (riscv-vector-tests @ $gen_rev, spike @ $spike_rev)"
+    '';
+
     enterShell = ''
       echo "Factorio mod dev env — channel: ''${FACTORIO_CHANNEL:-experimental}"
       echo "  modtest [chan]   busted + headless load-smoke   (canonical: devenv test)"
@@ -265,6 +356,7 @@ INI
       echo "  play   [chan]    full client (opt-in: withClient=true in devenv.nix)"
       echo "  lint | fmt | package"
       echo "  gen-riscv-tests  rebuild committed riscv-tests .s fixtures (dev-only, pinned)"
+      echo "  gen-riscv-vector-tests  rebuild the zve32x fixture set (dev-only, pinned; slow)"
       echo "  channels: stable | experimental   (export FACTORIO_CHANNEL to pin a shell)"
       echo "  note: the test command is 'modtest' — 'test' is the bash builtin."
     '';

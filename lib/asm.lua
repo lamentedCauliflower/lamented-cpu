@@ -116,7 +116,54 @@ local CSR = {
   marchid = 0xF12,
   mimpid = 0xF13,
   mhartid = 0xF14,
+  -- Zve32x (ADR-0012)
+  vstart = 0x008,
+  vxsat = 0x009,
+  vxrm = 0x00A,
+  vcsr = 0x00F,
+  vl = 0xC20,
+  vtype = 0xC21,
+  vlenb = 0xC22,
 }
+
+-- vector registers v0..v31 (a class of their own; never valid where an x
+-- register is expected, so they live outside REG)
+local function vreg(t)
+  local n = tonumber(t:gsub("%s", ""):match("^v(%d+)$") or "")
+  assert(n and n <= 31, "bad vector register '" .. tostring(t) .. "'")
+  return n
+end
+
+-- vtype operand list (e32, m2, ta, ma) -> vtype/zimm bits. Order-free; the
+-- policy tokens default to tu,mu when omitted (gas accepts that form).
+local VTYPE_TOK = {
+  e8 = { sew = 0 },
+  e16 = { sew = 1 },
+  e32 = { sew = 2 },
+  e64 = { sew = 3 }, -- encodable; the Hart flags vill (ELEN=32)
+  m1 = { lmul = 0 },
+  m2 = { lmul = 1 },
+  m4 = { lmul = 2 },
+  m8 = { lmul = 3 },
+  mf8 = { lmul = 5 },
+  mf4 = { lmul = 6 },
+  mf2 = { lmul = 7 },
+  tu = { ta = 0 },
+  ta = { ta = 0x40 },
+  mu = { ma = 0 },
+  ma = { ma = 0x80 },
+}
+local function vtypebits(toks)
+  local sew, lmul, ta, ma = 0, 0, 0, 0
+  for _, t in ipairs(toks) do
+    local d = VTYPE_TOK[t:gsub("%s", "")] or error("bad vtype operand '" .. tostring(t) .. "'")
+    sew = d.sew and d.sew or sew
+    lmul = d.lmul and d.lmul or lmul
+    ta = d.ta and d.ta or ta
+    ma = d.ma and d.ma or ma
+  end
+  return lmul + lsh(sew, 3) + ta + ma
+end
 
 local function reg(t)
   local r = REG[(t:gsub("%s", ""))]
@@ -301,6 +348,26 @@ local function eB(op, f3, rs1, rs2, off)
       + lsh(bits(off, 12, 12), 31)
   )
 end
+-- OP-V (0x57): funct6 | vm | vs2 | vs1/rs1/imm5 | funct3 | vd/rd
+local function eV(f6, vm, vs2, vs1, f3, vd)
+  return u32(
+    0x57 + lsh(vd, 7) + lsh(f3, 12) + lsh(vs1, 15) + lsh(vs2, 20) + lsh(vm, 25) + lsh(f6, 26)
+  )
+end
+-- vector load (0x07) / store (0x27): nf | mew=0 | mop | vm | lumop/rs2/vs2 |
+-- rs1 | width | vd/vs3
+local function eVmem(op, width, vm, rs1, r2, mop, nf, vreg3)
+  return u32(
+    op
+      + lsh(vreg3, 7)
+      + lsh(width, 12)
+      + lsh(rs1, 15)
+      + lsh(r2, 20)
+      + lsh(vm, 25)
+      + lsh(mop, 26)
+      + lsh(nf, 29)
+  )
+end
 local function eJ(op, rd, off)
   off = u32(off)
   return u32(
@@ -422,6 +489,233 @@ function M.assemble(src, resolver)
   local function parse_mem(tok) -- "imm(reg)" -> imm, regnum
     local imm, r = tok:match("^(.-)%(%s*([%w]+)%s*%)$")
     return (imm == "" and 0 or evalexpr(imm, sym, weak)), reg(r)
+  end
+
+  -- OP-V arithmetic, table-driven (ADR-0012: families grow by table rows, not
+  -- new branches). funct3 selects the operand category: OPIVV=0, OPMVV=2,
+  -- OPIVI=3, OPIVX=4, OPMVX=6; the .vv/.vx/.vi suffix picks it, and a trailing
+  -- `m` (.vvm/.vxm/.vim) is the carry/merge form with vm=0 and a literal v0
+  -- final operand. Encoded operand order is vd, vs2, vs1/rs1/imm.
+  local VF6 = {
+    vadd = 0x00,
+    vsub = 0x02,
+    vrsub = 0x03,
+    vminu = 0x04,
+    vmin = 0x05,
+    vmaxu = 0x06,
+    vmax = 0x07,
+    vand = 0x09,
+    vor = 0x0A,
+    vxor = 0x0B,
+    vadc = 0x10,
+    vmadc = 0x11,
+    vsbc = 0x12,
+    vmsbc = 0x13,
+    vmerge = 0x17,
+    vmseq = 0x18,
+    vmsne = 0x19,
+    vmsltu = 0x1A,
+    vmslt = 0x1B,
+    vmsleu = 0x1C,
+    vmsle = 0x1D,
+    vmsgtu = 0x1E,
+    vmsgt = 0x1F,
+    vsll = 0x25,
+    vsrl = 0x28,
+    vsra = 0x29,
+    -- fixed-point (#44)
+    vsaddu = 0x20,
+    vsadd = 0x21,
+    vssubu = 0x22,
+    vssub = 0x23,
+    vsmul = 0x27,
+    vssrl = 0x2A,
+    vssra = 0x2B,
+    -- narrowing shifts and clips (#44): .wv/.wx/.wi, vs2 at 2*SEW
+    vnsrl = 0x2C,
+    vnsra = 0x2D,
+    vnclipu = 0x2E,
+    vnclip = 0x2F,
+    -- permutation (#45): slides and gathers
+    vslideup = 0x0E,
+    vslidedown = 0x0F,
+    vrgather = 0x0C,
+    vrgatherei16 = 0x0E,
+  }
+  local VSUFF = { vv = 0, vx = 4, vi = 3, vvm = 0, vxm = 4, vim = 3, wv = 0, wx = 4, wi = 3 }
+  -- vmv.v.* is vmerge's encoding with vm=1 and vs2=0
+  local VMV = { ["vmv.v.v"] = 0, ["vmv.v.i"] = 3, ["vmv.v.x"] = 4 }
+  -- VXUNARY0 (OPMVV funct6=0x12): vs1 field encodes the widening factor/sign
+  local VEXT = {
+    ["vzext.vf4"] = 4,
+    ["vsext.vf4"] = 5,
+    ["vzext.vf2"] = 6,
+    ["vsext.vf2"] = 7,
+  }
+
+  -- reductions (.vs): vd[0] = reduce(vs1[0], vs2 elements). The two widening
+  -- sums are OPIVV; the single-width family is OPMVV.
+  local VRED = {
+    vredsum = { 0x00, 2 },
+    vredand = { 0x01, 2 },
+    vredor = { 0x02, 2 },
+    vredxor = { 0x03, 2 },
+    vredminu = { 0x04, 2 },
+    vredmin = { 0x05, 2 },
+    vredmaxu = { 0x06, 2 },
+    vredmax = { 0x07, 2 },
+    vwredsumu = { 0x30, 0 },
+    vwredsum = { 0x31, 0 },
+  }
+
+  -- OP-V multiply/divide/MAC/averaging/widening families, keyed by the full
+  -- mnemonic: { funct6, funct3, swap }. funct3 is OPMVV=2 or OPMVX=6; swap
+  -- marks the multiply-accumulates, whose assembly order is vd, vs1, vs2
+  -- (multiplier first) instead of vd, vs2, vs1.
+  local VM6 = {
+    ["vaaddu.vv"] = { 0x08, 2 },
+    ["vaaddu.vx"] = { 0x08, 6 },
+    ["vaadd.vv"] = { 0x09, 2 },
+    ["vaadd.vx"] = { 0x09, 6 },
+    ["vasubu.vv"] = { 0x0A, 2 },
+    ["vasubu.vx"] = { 0x0A, 6 },
+    ["vasub.vv"] = { 0x0B, 2 },
+    ["vasub.vx"] = { 0x0B, 6 },
+    ["vdivu.vv"] = { 0x20, 2 },
+    ["vdivu.vx"] = { 0x20, 6 },
+    ["vdiv.vv"] = { 0x21, 2 },
+    ["vdiv.vx"] = { 0x21, 6 },
+    ["vremu.vv"] = { 0x22, 2 },
+    ["vremu.vx"] = { 0x22, 6 },
+    ["vrem.vv"] = { 0x23, 2 },
+    ["vrem.vx"] = { 0x23, 6 },
+    ["vmulhu.vv"] = { 0x24, 2 },
+    ["vmulhu.vx"] = { 0x24, 6 },
+    ["vmul.vv"] = { 0x25, 2 },
+    ["vmul.vx"] = { 0x25, 6 },
+    ["vmulhsu.vv"] = { 0x26, 2 },
+    ["vmulhsu.vx"] = { 0x26, 6 },
+    ["vmulh.vv"] = { 0x27, 2 },
+    ["vmulh.vx"] = { 0x27, 6 },
+    ["vmadd.vv"] = { 0x29, 2, true },
+    ["vmadd.vx"] = { 0x29, 6, true },
+    ["vnmsub.vv"] = { 0x2B, 2, true },
+    ["vnmsub.vx"] = { 0x2B, 6, true },
+    ["vmacc.vv"] = { 0x2D, 2, true },
+    ["vmacc.vx"] = { 0x2D, 6, true },
+    ["vnmsac.vv"] = { 0x2F, 2, true },
+    ["vnmsac.vx"] = { 0x2F, 6, true },
+    ["vwaddu.vv"] = { 0x30, 2 },
+    ["vwaddu.vx"] = { 0x30, 6 },
+    ["vwadd.vv"] = { 0x31, 2 },
+    ["vwadd.vx"] = { 0x31, 6 },
+    ["vwsubu.vv"] = { 0x32, 2 },
+    ["vwsubu.vx"] = { 0x32, 6 },
+    ["vwsub.vv"] = { 0x33, 2 },
+    ["vwsub.vx"] = { 0x33, 6 },
+    ["vwaddu.wv"] = { 0x34, 2 },
+    ["vwaddu.wx"] = { 0x34, 6 },
+    ["vwadd.wv"] = { 0x35, 2 },
+    ["vwadd.wx"] = { 0x35, 6 },
+    ["vwsubu.wv"] = { 0x36, 2 },
+    ["vwsubu.wx"] = { 0x36, 6 },
+    ["vwsub.wv"] = { 0x37, 2 },
+    ["vwsub.wx"] = { 0x37, 6 },
+    ["vwmulu.vv"] = { 0x38, 2 },
+    ["vwmulu.vx"] = { 0x38, 6 },
+    ["vwmulsu.vv"] = { 0x3A, 2 },
+    ["vwmulsu.vx"] = { 0x3A, 6 },
+    ["vwmul.vv"] = { 0x3B, 2 },
+    ["vwmul.vx"] = { 0x3B, 6 },
+    ["vwmaccu.vv"] = { 0x3C, 2, true },
+    ["vwmaccu.vx"] = { 0x3C, 6, true },
+    ["vwmacc.vv"] = { 0x3D, 2, true },
+    ["vwmacc.vx"] = { 0x3D, 6, true },
+    ["vwmaccus.vx"] = { 0x3E, 6, true },
+    ["vwmaccsu.vv"] = { 0x3F, 2, true },
+    ["vwmaccsu.vx"] = { 0x3F, 6, true },
+    ["vslide1up.vx"] = { 0x0E, 6 },
+    ["vslide1down.vx"] = { 0x0F, 6 },
+  }
+
+  -- VMUNARY0 (OPMVV funct6=0x14): vs1 field encodes the operation
+  local VMUN = {
+    ["vmsbf.m"] = 1,
+    ["vmsof.m"] = 2,
+    ["vmsif.m"] = 3,
+    ["viota.m"] = 0x10,
+  }
+
+  -- mask-register logicals (.mm): OPMVV, always unmasked
+  local VMLOG = {
+    vmandn = 0x18,
+    vmand = 0x19,
+    vmor = 0x1A,
+    vmxor = 0x1B,
+    vmorn = 0x1C,
+    vmnand = 0x1D,
+    vmnor = 0x1E,
+    vmxnor = 0x1F,
+  }
+
+  -- Vector memory mnemonic -> encoding fields + operand style. Covers every
+  -- Zve32x form: unit-stride, fault-only-first, strided, indexed
+  -- (ordered/unordered), mask, whole-register, and the seg<n> variants of
+  -- each (ADR-0012). Styles: "unit" = vd,(rs1); "stride" = vd,(rs1),xreg;
+  -- "index" = vd,(rs1),vreg. Returns nil for non-memory mnemonics.
+  local WIDTH_F3 = { ["8"] = 0, ["16"] = 5, ["32"] = 6, ["64"] = 7 }
+  local function vmemform(m)
+    local ls, rest = m:match("^v([ls])(.+)%.v$")
+    if not ls then
+      return nil
+    end
+    local op = ls == "l" and 0x07 or 0x27
+    local n, e
+    n, e = rest:match("^(%d)re(%d+)$") -- whole-register load
+    if n and op == 0x07 then
+      return { op = op, nf = n - 1, mop = 0, um = 0x08, w = WIDTH_F3[e], style = "unit" }
+    end
+    n = rest:match("^(%d)r$") -- whole-register store (EEW=8 form only)
+    if n and op == 0x27 then
+      return { op = op, nf = n - 1, mop = 0, um = 0x08, w = 0, style = "unit" }
+    end
+    if rest == "m" then -- vlm/vsm mask load/store
+      return { op = op, nf = 0, mop = 0, um = 0x0B, w = 0, style = "unit", nomask = true }
+    end
+    n, e = rest:match("^seg(%d)e(%d+)$") -- unit-stride segment
+    if n then
+      return { op = op, nf = n - 1, mop = 0, um = 0, w = WIDTH_F3[e], style = "unit" }
+    end
+    n, e = rest:match("^seg(%d)e(%d+)ff$") -- fault-only-first segment
+    if n and op == 0x07 then
+      return { op = op, nf = n - 1, mop = 0, um = 0x10, w = WIDTH_F3[e], style = "unit" }
+    end
+    n, e = rest:match("^sseg(%d)e(%d+)$") -- strided segment
+    if n then
+      return { op = op, nf = n - 1, mop = 2, w = WIDTH_F3[e], style = "stride" }
+    end
+    local ord
+    ord, n, e = rest:match("^([ou])xseg(%d)ei(%d+)$") -- indexed segment
+    if ord then
+      return { op = op, nf = n - 1, mop = ord == "o" and 3 or 1, w = WIDTH_F3[e], style = "index" }
+    end
+    ord, e = rest:match("^([ou])xei(%d+)$") -- indexed
+    if ord then
+      return { op = op, nf = 0, mop = ord == "o" and 3 or 1, w = WIDTH_F3[e], style = "index" }
+    end
+    e = rest:match("^se(%d+)$") -- strided
+    if e then
+      return { op = op, nf = 0, mop = 2, w = WIDTH_F3[e], style = "stride" }
+    end
+    e = rest:match("^e(%d+)ff$") -- fault-only-first
+    if e and op == 0x07 then
+      return { op = op, nf = 0, mop = 0, um = 0x10, w = WIDTH_F3[e], style = "unit" }
+    end
+    e = rest:match("^e(%d+)$") -- unit-stride
+    if e then
+      return { op = op, nf = 0, mop = 0, um = 0, w = WIDTH_F3[e], style = "unit" }
+    end
+    return nil
   end
 
   local ALU = {
@@ -661,6 +955,157 @@ function M.assemble(src, resolver)
       emit(function()
         return 0xC0001073
       end)
+    elseif m == "vsetvli" then
+      local rd, rs1 = reg(o[1]), reg(o[2])
+      local z = vtypebits({ table.unpack(o, 3) })
+      emit(function()
+        return eI(0x57, 7, rd, rs1, z)
+      end)
+    elseif m == "vsetivli" then
+      local rd = reg(o[1])
+      local uimm = band(evalexpr(o[2], sym, weak), 0x1F)
+      local z = vtypebits({ table.unpack(o, 3) })
+      emit(function()
+        return eI(0x57, 7, rd, uimm, 0xC00 + z)
+      end)
+    elseif m == "vsetvl" then
+      local rd, rs1, rs2 = reg(o[1]), reg(o[2]), reg(o[3])
+      emit(function()
+        return eR(0x57, 7, 0x40, rd, rs1, rs2)
+      end)
+    elseif vmemform(m) then
+      local fm = vmemform(m)
+      local vd = vreg(o[1])
+      local _, rs1 = parse_mem(o[2])
+      local r2, masked
+      if fm.style == "stride" then
+        r2 = reg(o[3])
+        masked = o[4] == "v0.t"
+      elseif fm.style == "index" then
+        r2 = vreg(o[3])
+        masked = o[4] == "v0.t"
+      else
+        r2 = fm.um
+        masked = o[3] == "v0.t"
+      end
+      local vm = (masked and not fm.nomask) and 0 or 1
+      emit(function()
+        return eVmem(fm.op, fm.w, vm, rs1, r2, fm.mop, fm.nf, vd)
+      end)
+    elseif m == "vmsgt.vv" or m == "vmsgtu.vv" then
+      -- pseudo-instructions (no .vv encoding of their own): swap the sources
+      -- onto vmslt(u).vv
+      local f6 = m == "vmsgt.vv" and 0x1B or 0x1A
+      local vd, va, vb = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      local vm = o[4] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(f6, vm, vb, va, 0, vd)
+      end)
+    elseif VF6[m:match("^(v%w+)%.")] and VSUFF[m:match("%.([vw][vxi]m?)$")] then
+      local f6, f3 = VF6[m:match("^(v%w+)%.")], VSUFF[m:match("%.([vw][vxi]m?)$")]
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      -- carry/merge forms name v0 as their final operand; masked forms say v0.t
+      local vm = (m:sub(-1) == "m" or o[4] == "v0.t") and 0 or 1
+      local vs1 -- register number or masked immediate, per operand category
+      if f3 == 3 then
+        vs1 = band(evalexpr(o[3], sym, weak), 0x1F)
+      elseif f3 == 4 then
+        vs1 = reg(o[3])
+      else
+        vs1 = vreg(o[3])
+      end
+      emit(function()
+        return eV(f6, vm, vs2, vs1, f3, vd)
+      end)
+    elseif VMV[m] then
+      local f3 = VMV[m]
+      local vd = vreg(o[1])
+      local vs1
+      if f3 == 3 then
+        vs1 = band(evalexpr(o[2], sym, weak), 0x1F)
+      elseif f3 == 4 then
+        vs1 = reg(o[2])
+      else
+        vs1 = vreg(o[2])
+      end
+      emit(function()
+        return eV(0x17, 1, 0, vs1, f3, vd)
+      end)
+    elseif VEXT[m] then
+      local code = VEXT[m]
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(0x12, vm, vs2, code, 2, vd)
+      end)
+    elseif VRED[m:match("^(v%w+)%.vs$")] then
+      local r = VRED[m:match("^(v%w+)%.vs$")]
+      local vd, vs2, vs1 = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      local vm = o[4] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(r[1], vm, vs2, vs1, r[2], vd)
+      end)
+    elseif VMLOG[m:match("^(v%w+)%.mm$")] then
+      local f6 = VMLOG[m:match("^(v%w+)%.mm$")]
+      local vd, vs2, vs1 = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      emit(function()
+        return eV(f6, 1, vs2, vs1, 2, vd)
+      end)
+    elseif m == "vcpop.m" or m == "vfirst.m" then
+      -- VWXUNARY0: an x-register destination in the vd field
+      local rd, vs2 = reg(o[1]), vreg(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      local code = m == "vcpop.m" and 0x10 or 0x11
+      emit(function()
+        return eV(0x10, vm, vs2, code, 2, rd)
+      end)
+    elseif m == "vmv.s.x" then
+      -- VRXUNARY0: rs1 rides the vs1 field, vs2 must be 0
+      local vd, rs1 = vreg(o[1]), reg(o[2])
+      emit(function()
+        return eV(0x10, 1, 0, rs1, 6, vd)
+      end)
+    elseif m == "vmv.x.s" then
+      -- VWXUNARY0 code 0: x[rd] = element 0 of vs2
+      local rd, vs2 = reg(o[1]), vreg(o[2])
+      emit(function()
+        return eV(0x10, 1, vs2, 0, 2, rd)
+      end)
+    elseif m == "vcompress.vm" then
+      local vd, vs2, vs1 = vreg(o[1]), vreg(o[2]), vreg(o[3])
+      emit(function()
+        return eV(0x17, 1, vs2, vs1, 2, vd)
+      end)
+    elseif m:match("^vmv[1248]r%.v$") then
+      -- whole-register move: n-1 rides the vs1 field
+      local n = tonumber(m:match("^vmv(%d)r"))
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      emit(function()
+        return eV(0x27, 1, vs2, n - 1, 3, vd)
+      end)
+    elseif VM6[m] then
+      local t = VM6[m]
+      local o2, o3 = o[t[3] and 3 or 2], o[t[3] and 2 or 3]
+      local vd, vs2 = vreg(o[1]), vreg(o2)
+      local vs1 = t[2] == 6 and reg(o3) or vreg(o3)
+      local vm = o[4] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(t[1], vm, vs2, vs1, t[2], vd)
+      end)
+    elseif VMUN[m] then
+      -- VMUNARY0: the operation code rides the vs1 field
+      local code = VMUN[m]
+      local vd, vs2 = vreg(o[1]), vreg(o[2])
+      local vm = o[3] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(0x14, vm, vs2, code, 2, vd)
+      end)
+    elseif m == "vid.v" then
+      local vd = vreg(o[1])
+      local vm = o[2] == "v0.t" and 0 or 1
+      emit(function()
+        return eV(0x14, vm, 0, 0x11, 2, vd)
+      end)
     else
       error("unsupported instruction '" .. m .. "'")
     end
@@ -694,12 +1139,24 @@ function M.assemble(src, resolver)
         end)
       end
       lc = target
-    elseif d == ".dword" or d == ".word" or d == ".half" or d == ".byte" then
-      local n = ({ [".dword"] = 8, [".word"] = 4, [".half"] = 2, [".byte"] = 1 })[d]
+    elseif d == ".dword" or d == ".quad" or d == ".word" or d == ".half" or d == ".byte" then
+      local n = ({ [".dword"] = 8, [".quad"] = 8, [".word"] = 4, [".half"] = 2, [".byte"] = 1 })[d]
       for e in (rest .. ","):gmatch("%s*(.-)%s*,") do -- comma-separated values
-        emit_data(n, function(s, wk)
-          return evalexpr(e, s, wk)
-        end)
+        -- 8-byte data: a plain hex literal wider than 32 bits keeps its real
+        -- high word (riscv-vector-tests test data is .quad-packed); computed
+        -- expressions stay u32 with a zero high word, which is all the
+        -- riscv-tests fixtures ever put there.
+        local hex = n == 8 and e:match("^0[xX](%x+)$")
+        if hex and #hex > 8 then
+          local lo, hi = tonumber(hex:sub(-8), 16), tonumber(hex:sub(1, -9), 16)
+          emit_data(n, function()
+            return lo, hi
+          end)
+        else
+          emit_data(n, function(s, wk)
+            return evalexpr(e, s, wk)
+          end)
+        end
       end
     elseif d == ".fill" then
       -- .fill repeat, size, value
@@ -804,9 +1261,10 @@ function M.assemble(src, resolver)
   end
   local bytes = {}
   for _, d in ipairs(data) do
-    local v = u32(d.gen(sym, weak))
+    local lo, hi = d.gen(sym, weak)
+    lo, hi = u32(lo), u32(hi or 0)
     for i = 0, d.n - 1 do
-      bytes[d.addr + i] = i < 4 and band(rsh(v, i * 8), 0xFF) or 0
+      bytes[d.addr + i] = band(rsh(i < 4 and lo or hi, (i % 4) * 8), 0xFF)
     end
   end
   return { words = words, bytes = bytes, symbols = sym, entry = RESET, lines = lines }

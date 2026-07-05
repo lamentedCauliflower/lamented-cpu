@@ -174,6 +174,81 @@ describe("Inspector memory view-model", function()
   end)
 end)
 
+describe("Inspector vector view-model", function()
+  local Hart = require("hart")
+  local Mem = require("mem")
+
+  it("readout shows vl, decoded vtype, and vstart", function()
+    local h = Hart.new(Mem.new())
+    h.csr[0xC21] = 0xD0 -- vtype = e32, m1, ta, ma
+    h.csr[0xC20] = 4 -- vl
+    h.csr[0x008] = 1 -- vstart
+    assert.are.equal("vl=4  vtype=e32m1,ta,ma  vstart=1", Inspector.vector_readout(h))
+  end)
+
+  it("readout decodes tu/mu and fractional LMUL", function()
+    local h = Hart.new(Mem.new())
+    h.csr[0xC21] = 0x07 -- e8, mf2, tu, mu
+    h.csr[0xC20] = 8
+    h.csr[0x008] = 0
+    assert.are.equal("vl=8  vtype=e8mf2,tu,mu  vstart=0", Inspector.vector_readout(h))
+  end)
+
+  it("readout reports vill (the reset state)", function()
+    local h = Hart.new(Mem.new())
+    assert.are.equal("vl=0  vtype=vill  vstart=0", Inspector.vector_readout(h))
+  end)
+
+  it("rows split v0..v31 into four cells at e32", function()
+    local h = Hart.new(Mem.new())
+    h.csr[0xC21] = 0xD0 -- e32m1
+    h.v[1] = { 0x2a, 0, 0, 0xdeadbeef }
+    local rows = Inspector.vector_rows(h)
+    assert.are.equal(32, #rows)
+    assert.are.equal("v0", rows[1].label)
+    assert.are.same({ "00000000", "00000000", "00000000", "00000000" }, rows[1].cells)
+    assert.are.equal("v1", rows[2].label)
+    assert.are.same({ "0000002a", "00000000", "00000000", "deadbeef" }, rows[2].cells)
+    assert.are.equal("v31", rows[32].label)
+  end)
+
+  it("rows split into sixteen byte cells at e8, little-endian first", function()
+    local h = Hart.new(Mem.new())
+    h.csr[0xC21] = 0x00 -- e8m1
+    h.v[2] = { 0x11223344, 0, 0, 0x55667788 }
+    local rows = Inspector.vector_rows(h)
+    assert.are.equal(16, #rows[3].cells)
+    -- word 0x11223344: byte 0 (element 0) is 0x44
+    assert.are.same({ "44", "33", "22", "11" }, { table.unpack(rows[3].cells, 1, 4) })
+    assert.are.same({ "88", "77", "66", "55" }, { table.unpack(rows[3].cells, 13, 16) })
+  end)
+
+  it("rows split into eight halfword cells at e16", function()
+    local h = Hart.new(Mem.new())
+    h.csr[0xC21] = 0x08 -- e16m1
+    h.v[0] = { 0x11223344, 0, 0, 0 }
+    local rows = Inspector.vector_rows(h)
+    assert.are.equal(8, #rows[1].cells)
+    assert.are.same({ "3344", "1122" }, { table.unpack(rows[1].cells, 1, 2) })
+  end)
+
+  it("rows fall back to the raw word view under vill", function()
+    local h = Hart.new(Mem.new()) -- reset state: vtype = vill
+    h.v[5] = { 0xcafebabe, 0, 0, 0 }
+    local rows = Inspector.vector_rows(h)
+    assert.are.equal(4, #rows[6].cells)
+    assert.are.equal("cafebabe", rows[6].cells[1])
+  end)
+
+  it("rows render zeros for a pre-extension Hart with no v file", function()
+    local h = Hart.new(Mem.new())
+    h.v = nil -- a Hart deserialized from a save made before Zve32x
+    local rows = Inspector.vector_rows(h)
+    assert.are.equal(32, #rows)
+    assert.are.equal("00000000", rows[1].cells[1])
+  end)
+end)
+
 describe("Inspector changed-cell diff", function()
   it("flags only value changes; baseline and no-change flash nothing", function()
     local prev = { { label = "a", value = "0x1" }, { label = "b", value = "0x2" } }

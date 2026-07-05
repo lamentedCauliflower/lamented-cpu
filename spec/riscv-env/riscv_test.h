@@ -22,6 +22,7 @@
 #define MSTATUS_MIE 0x00000008
 #define MSTATUS_MPP 0x00001800
 #define MSTATUS_FS 0x00006000
+#define MSTATUS_VS 0x00000600
 #define PRV_U 0
 #define PRV_S 1
 #define PRV_M 3
@@ -34,6 +35,17 @@
 #define RVTEST_RV64U .macro init; .endm
 #define RVTEST_RV64M .macro init; .endm
 #define RVTEST_RV64S .macro init; .endm
+
+// Vector TVMs (riscv-vector-tests, ADR-0012): enable mstatus.VS at reset and
+// zero vcsr, mirroring riscv-test-env's RVTEST_ZVE32X_ENABLE. The UVX form is
+// what the zve32x (integer-only) generator preset emits; UV is kept for
+// symmetry with upstream.
+#define RVTEST_VECTOR_INIT                                             \
+        li t5, (MSTATUS_VS & (MSTATUS_VS >> 1));                       \
+        csrs mstatus, t5;                                              \
+        csrwi vcsr, 0;
+#define RVTEST_RV32UV .macro init; RVTEST_VECTOR_INIT; .endm
+#define RVTEST_RV32UVX .macro init; RVTEST_VECTOR_INIT; .endm
 
 #define RVTEST_CODE_BEGIN                                               \
         .section .text.init;                                           \

@@ -83,3 +83,85 @@ describe("circuit I/O walking skeleton", function()
     assert.is_truthy(image.words)
   end)
 end)
+
+-- Vector stores vs the controller (#41): an element store landing in the
+-- watched trigger-register window (STATUS/SAMPLE/COMMIT/reserved, BASE+0x00..
+-- 0x0F) must trap with the store access-fault cause instead of recording a
+-- doorbell; the data regions (Query, Snapshot, Staging) stay plain memory for
+-- vector access. Reachable in-game only: io_base is nil under conformance.
+describe("vector stores and the controller window", function()
+  -- assemble with the controller armed and run to the end of the listing (a
+  -- trap redirects to mtvec=0, which is outside it, so a fault also stops)
+  local function armed_run(src)
+    local image = asm.assemble(src)
+    local hart = Hart.new(Mem.new())
+    hart.io_base = io.BASE
+    hart:load(image)
+    for _ = 1, 100 do
+      if not image.words[hart.pc] then
+        break
+      end
+      hart:step()
+    end
+    return hart, image
+  end
+
+  it("a vse32 into the trigger window traps, no doorbell", function()
+    local hart = armed_run([[
+      li t0, 0x10000000
+      vsetvli t1, x0, e32, m1, tu, mu
+      vmv.v.i v1, 1
+      vse32.v v1, (t0)      # spans STATUS..COMMIT: element store must fault
+    ]])
+    assert.are.equal(7, hart.csr[0x342]) -- mcause: store/AMO access fault
+    assert.are.equal(0x10000000, hart.csr[0x343]) -- mtval: faulting address
+    assert.is_nil(hart.doorbell)
+  end)
+
+  it("a masked vse8 whose only active element hits the window also traps", function()
+    local hart = armed_run([[
+      li t0, 0x10000004     # SAMPLE
+      li t2, 0x100          # mask: only element 8 active -> address t0+8
+      vsetvli t1, x0, e8, m1, tu, mu
+      vmv.v.i v1, 3
+      vsetvli t1, x0, e32, m1, tu, mu
+      vmv.v.x v0, t2        # low word of v0 = 0x100: element 8 only
+      vsetvli t1, x0, e8, m1, tu, mu
+      vse8.v v1, (t0), v0.t
+    ]])
+    assert.are.equal(7, hart.csr[0x342])
+    assert.are.equal(0x1000000c, hart.csr[0x343]) -- SAMPLE+8 = BASE+0xC
+    assert.is_nil(hart.doorbell)
+  end)
+
+  it("vector loads over the window never fault, and data regions are plain memory", function()
+    local hart, image = armed_run([[
+      li s0, 0x10000800     # STAGING
+      la a0, vals
+      vsetvli t1, x0, e32, m1, tu, mu
+      vle32.v v1, (a0)
+      vse32.v v1, (s0)      # bulk staging fill: the intended fast path
+      li t0, 0x10000000
+      vle32.v v2, (t0)      # loads over the trigger window are fine
+      la a1, out
+      vse32.v v2, (a1)
+    vals: .word 5, 6, 7, 8
+    out:  .word 0, 0, 0, 0
+    ]])
+    assert.are.equal(0, hart.csr[0x342] or 0) -- no trap
+    assert.is_nil(hart.doorbell) -- data-region stores ring nothing
+    assert.are.equal(5, hart.mem:r32(0x10000800))
+    assert.are.equal(8, hart.mem:r32(0x1000080c))
+    assert.are.equal(0, hart.mem:r32(image.symbols.out)) -- window reads as 0
+  end)
+
+  it("scalar doorbells are unchanged", function()
+    local hart = armed_run([[
+      li t0, 0x10000000
+      li t1, 1
+      sw t1, 4(t0)          # SAMPLE: records a doorbell, no trap
+    ]])
+    assert.are.equal(0, hart.csr[0x342] or 0)
+    assert.are.same({ off = 4, value = 1 }, hart.doorbell)
+  end)
+end)

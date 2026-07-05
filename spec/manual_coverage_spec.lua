@@ -27,6 +27,6 @@ describe("Manual mnemonic coverage", function()
   end
 
   it("documents a non-trivial instruction set", function()
-    assert.is_true(n >= 70, "expected the full RV32IM_Zicsr subset, saw " .. n)
+    assert.is_true(n >= 250, "expected RV32IM_Zicsr plus the Zve32x chapter, saw " .. n)
   end)
 end)
